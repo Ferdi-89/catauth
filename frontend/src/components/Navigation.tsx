@@ -3,15 +3,51 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Shield, Radio, Layers, Key, Server, Terminal, Sliders, AlertCircle, Link2 } from 'lucide-react';
+import { Shield, Radio, Layers, Key, Server, Terminal, Sliders, AlertCircle, Link2, Lock } from 'lucide-react';
 
 export function Navigation() {
-
   const pathname = usePathname();
 
+  // If on SSO gateway login or callback, show a clean, secure kiosk header without admin options
+  const isSSO = pathname.startsWith('/sso');
+
+  if (isSSO) {
+    return (
+      <header className="sticky top-0 z-50 bg-black/90 backdrop-blur-md border-b border-neutral-900">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6">
+          <div className="flex items-center justify-between h-14">
+            {/* Minimalist Gateway Branding */}
+            <div className="flex items-center space-x-2.5">
+              <div className="w-6 h-6 flex items-center justify-center">
+                <svg viewBox="0 0 76 65" fill="none" className="w-5 h-5 text-white">
+                  <path d="M37.5274 0L75.0548 65H0L37.5274 0Z" fill="currentColor" />
+                </svg>
+              </div>
+              <div className="flex items-center space-x-2">
+                <span className="text-sm font-semibold tracking-tight text-white">
+                  CATAUTH
+                </span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950/60 text-emerald-400 border border-emerald-800/40 flex items-center space-x-1">
+                  <Lock className="w-2.5 h-2.5" />
+                  <span>Secure SSO Gateway</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Security Indicator */}
+            <div className="flex items-center space-x-2 text-[11px] font-mono text-neutral-400">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="hidden sm:inline">Hardware Encrypted • Zero Password</span>
+            </div>
+          </div>
+        </div>
+      </header>
+    );
+  }
+
+  // Admin Navigation Items
   const navItems = [
     { label: 'Overview', href: '/', icon: Layers },
-    { label: 'SSO Gateway', href: '/sso/login?client_id=client_portal_alpha&redirect_uri=/sso/callback&state=demo_state_123', icon: Radio },
     { label: 'Links', href: '/admin/links', icon: Link2 },
     { label: 'Telemetry', href: '/admin/dashboard', icon: Server },
     { label: 'Topology 72N', href: '/admin/topology', icon: Layers },
@@ -21,7 +57,6 @@ export function Navigation() {
     { label: 'DLQ', href: '/admin/dlq', icon: AlertCircle },
     { label: 'Simulator', href: '/simulator', icon: Terminal },
   ];
-
 
   return (
     <header className="sticky top-0 z-50 bg-black/80 backdrop-blur-md border-b border-border">
@@ -40,12 +75,12 @@ export function Navigation() {
                   CATAUTH
                 </span>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-neutral-900 text-neutral-400 border border-neutral-800">
-                  v0.3.0
+                  Admin Hub
                 </span>
               </div>
             </Link>
 
-            {/* Desktop Navigation Links */}
+            {/* Desktop Admin Navigation Links */}
             <nav className="hidden md:flex items-center space-x-1">
               {navItems.map((item) => {
                 const isActive = pathname === item.href.split('?')[0];
@@ -73,14 +108,12 @@ export function Navigation() {
               <span>RP: catauth.io</span>
             </div>
 
-            <a
-              href="http://localhost:8000/docs"
-              target="_blank"
-              rel="noreferrer"
+            <Link
+              href="/admin/links"
               className="px-3 py-1 rounded-md text-xs font-medium bg-white text-black hover:bg-neutral-200 transition-colors"
             >
-              API Docs
-            </a>
+              Kelola Links
+            </Link>
           </div>
         </div>
       </div>
@@ -89,4 +122,3 @@ export function Navigation() {
 }
 
 export default Navigation;
-
