@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { credentialsStore } from '../../../../credentials/tokens/route';
+import { db, isSupabaseConfigured } from '../../../../../../../lib/supabase';
 
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
   const credentialId = decodeURIComponent(params.id);
@@ -27,9 +28,14 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     delete credentialsStore[index].revoked_at;
   }
 
+  if (isSupabaseConfigured()) {
+    await db.updateCredentialStatus(credentialId, isActive, reason);
+  }
+
   return NextResponse.json({
     success: true,
     data: credentialsStore[index],
+    source: isSupabaseConfigured() ? 'supabase' : 'in_memory',
     message: `Status token ${credentialId} berhasil diubah menjadi ${isActive ? 'ACTIVE' : 'REVOKED'}.`,
   });
 }

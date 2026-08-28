@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { FIDO2Credential } from '../../../../lib/types';
+import { FIDO2Credential } from '../../../../../lib/types';
+import { db, isSupabaseConfigured } from '../../../../../lib/supabase';
 
 export let credentialsStore: FIDO2Credential[] = [
   {
@@ -37,9 +38,22 @@ export let credentialsStore: FIDO2Credential[] = [
 ];
 
 export async function GET() {
+  if (isSupabaseConfigured()) {
+    const sbData = await db.getCredentials();
+    if (sbData && sbData.length > 0) {
+      credentialsStore = sbData;
+      return NextResponse.json({
+        success: true,
+        data: sbData,
+        source: 'supabase',
+      });
+    }
+  }
+
   return NextResponse.json({
     success: true,
     data: credentialsStore,
+    source: 'in_memory',
   });
 }
 
@@ -61,7 +75,7 @@ export async function POST(request: Request) {
   }
 
   const newCred: FIDO2Credential = {
-    id: `cred_${Date.now()}`,
+    id: body.id || `cred_${Date.now()}`,
     user_id: body.user_id || 'usr_demo_john_doe',
     credential_id: credId,
     label,
@@ -74,9 +88,14 @@ export async function POST(request: Request) {
 
   credentialsStore.push(newCred);
 
+  if (isSupabaseConfigured()) {
+    await db.insertCredential(newCred);
+  }
+
   return NextResponse.json({
     success: true,
     data: newCred,
+    source: isSupabaseConfigured() ? 'supabase' : 'in_memory',
     message: `Kunci hardware "${label}" berhasil didaftarkan ke sistem.`,
   });
 }
