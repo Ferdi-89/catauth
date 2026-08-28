@@ -1,80 +1,163 @@
-import { StandardResponse } from './types';
+import {
+  APIResponse,
+  TelemetryDashboard,
+  AuditLog,
+  ClientApp,
+  FIDO2Credential,
+  ProtectedLink,
+} from './types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
+// Standalone Next.js 14 API Route Handlers
+const API_BASE_URL = '';
 
-
-async function request<T = any>(endpoint: string, options: RequestInit = {}): Promise<StandardResponse<T>> {
-  const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;
-  
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> || {}),
-  };
-
+async function request<T>(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<APIResponse<T>> {
   try {
+    const url = `${API_BASE_URL}${endpoint}`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(options.headers as Record<string, string>),
+    };
+
     const res = await fetch(url, {
       ...options,
       headers,
     });
 
     const data = await res.json();
-    if (!res.ok) {
-      return {
-        success: false,
-        error: data.error || {
-          code: `HTTP_${res.status}`,
-          message: data.message || res.statusText || 'Request failed',
-          details: data,
-        },
-      };
-    }
-
     return data;
   } catch (err: any) {
+    console.error(`API Request Error [${endpoint}]:`, err);
     return {
       success: false,
       error: {
         code: 'NETWORK_ERROR',
-        message: err.message || 'Failed to connect to Catauth API backend.',
+        message: err.message || 'Gagal terhubung ke gateway API.',
       },
     };
   }
 }
 
+// Local storage keys for persistent offline/cold-start resilience
+const STORAGE_CUSTOM_KEYS = 'catauth_custom_keys_v1';
+const STORAGE_CUSTOM_LINKS = 'catauth_custom_links_v1';
+
+function getLocalCustomKeys(): FIDO2Credential[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_CUSTOM_KEYS);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalCustomKey(key: FIDO2Credential) {
+  if (typeof window === 'undefined') return;
+  try {
+    const existing = getLocalCustomKeys();
+    const filtered = existing.filter((k) => k.credential_id !== key.credential_id);
+    filtered.push(key);
+    localStorage.setItem(STORAGE_CUSTOM_KEYS, JSON.stringify(filtered));
+  } catch (err) {
+    console.warn('LocalStorage save error:', err);
+  }
+}
+
+function getLocalCustomLinks(): ProtectedLink[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_CUSTOM_LINKS);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalCustomLink(link: ProtectedLink) {
+  if (typeof window === 'undefined') return;
+  try {
+    const existing = getLocalCustomLinks();
+    const filtered = existing.filter((l) => l.id !== link.id);
+    filtered.push(link);
+    localStorage.setItem(STORAGE_CUSTOM_LINKS, JSON.stringify(filtered));
+  } catch (err) {
+    console.warn('LocalStorage save error:', err);
+  }
+}
+
 export const api = {
-  // Protected Links Hub
-  listProtectedLinks: () => {
-    return request<ProtectedLink[]>('/api/v1/links');
+  // Telemetry
+  getDashboardTelemetry: (linkId?: string) => {
+    const q = linkId ? `?link_id=${linkId}` : '';
+    return request<TelemetryDashboard>(`/api/v1/telemetry/dashboard${q}`);
   },
 
-  getProtectedLink: (id: string) => {
-    return request<ProtectedLink>(`/api/v1/links/${id}`);
+  getAuditLogs: (limit = 10, linkId?: string) => {
+    const params = new URLSearchParams({ limit: limit.toString() });
+    if (linkId) params.set('link_id', linkId);
+    return request<AuditLog[]>(`/api/v1/telemetry/audit-logs?${params.toString()}`);
   },
 
-  createProtectedLink: (payload: {
+  // Protected Links Hub (CRUD with LocalStorage Rehydration)
+  listProtectedLinks: async () => {
+    const res = await request<ProtectedLink[]>('/api/v1/links');
+    const localLinks = getLocalCustomLinks();
+
+    if (res.success && res.data) {
+      // If server cold-started, rehydrate missing local links to server
+      const serverIds = new Set(res.data.map((l) => l.id));
+      for (const localLink of localLinks) {
+        if (!serverIds.has(localLink.id)) {
+          // Re-post to server store
+          api.createProtectedLink(localLink);
+          res.data.push(localLink);
+        }
+      }
+    }
+    return res;
+  },
+
+  createProtectedLink: async (payload: {
+    id?: string;
     title: string;
-    slug?: string;
+    description?: string;
     target_redirect_url: string;
     allowed_card_ids: string[];
     require_pin?: boolean;
     geofence_enabled?: boolean;
-    allowed_countries?: string[];
   }) => {
-    return request<ProtectedLink>('/api/v1/links', {
+    const res = await request<ProtectedLink>('/api/v1/links', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+    if (res.success && res.data) {
+      saveLocalCustomLink(res.data);
+    }
+    return res;
   },
 
-  updateProtectedLink: (id: string, payload: Partial<ProtectedLink>) => {
-    return request<ProtectedLink>(`/api/v1/links/${id}`, {
+  updateProtectedLink: async (id: string, payload: Partial<ProtectedLink>) => {
+    const res = await request<ProtectedLink>(`/api/v1/links/${id}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
     });
+    if (res.success && res.data) {
+      saveLocalCustomLink(res.data);
+    }
+    return res;
   },
 
   deleteProtectedLink: (id: string) => {
-    return request(`/api/v1/links/${id}`, {
+    if (typeof window !== 'undefined') {
+      try {
+        const local = getLocalCustomLinks().filter((l) => l.id !== id);
+        localStorage.setItem(STORAGE_CUSTOM_LINKS, JSON.stringify(local));
+      } catch {}
+    }
+    return request<void>(`/api/v1/links/${id}`, {
       method: 'DELETE',
     });
   },
@@ -140,6 +223,7 @@ export const api = {
     client_id: string;
     client_secret?: string;
     redirect_uri?: string;
+    code_verifier?: string;
   }) => {
     return request('/api/v1/oauth/token', {
       method: 'POST',
@@ -154,50 +238,52 @@ export const api = {
     });
   },
 
-  // Telemetry & Audit Logs
-  getDashboardTelemetry: (linkId?: string) => {
-    const q = linkId && linkId !== 'all' ? `?link_id=${linkId}` : '';
-    return request<DashboardTelemetry>(`/api/v1/telemetry/dashboard${q}`);
-  },
-
-  getAuditLogs: (limit = 20, linkId?: string) => {
-    const params = new URLSearchParams({ limit: limit.toString() });
-    if (linkId && linkId !== 'all') params.set('link_id', linkId);
-    return request<AuditLog[]>(`/api/v1/telemetry/audit-logs?${params.toString()}`);
-  },
-
-  // Clients & Credentials Management
+  // Admin & Clients Management
   listClients: () => {
     return request<ClientApp[]>('/api/v1/clients');
   },
 
-  createClient: (payload: {
-    app_name: string;
-    redirect_uris: string[];
-    allowed_origins: string[];
-    webhook_logout_url?: string;
-  }) => {
+  registerClient: (payload: { app_name: string; redirect_uris: string[]; origin: string }) => {
     return request<ClientApp>('/api/v1/clients', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
   },
 
-  listCredentials: () => {
-    return request<FIDO2Credential[]>('/api/v1/credentials/tokens');
+  // Hardware Credentials Vault (with LocalStorage Rehydration)
+  listCredentials: async () => {
+    const res = await request<FIDO2Credential[]>('/api/v1/credentials/tokens');
+    const localKeys = getLocalCustomKeys();
+
+    if (res.success && res.data) {
+      // Rehydrate local custom cards to server if cold-started
+      const serverCredIds = new Set(res.data.map((c) => c.credential_id));
+      for (const localKey of localKeys) {
+        if (!serverCredIds.has(localKey.credential_id)) {
+          api.registerCredential(localKey);
+          res.data.push(localKey);
+        }
+      }
+    }
+    return res;
   },
 
-  registerCredential: (payload: {
+  registerCredential: async (payload: {
     user_id: string;
     credential_id: string;
     label: string;
     aaguid?: string;
     transports?: string[];
+    sign_count?: number;
   }) => {
-    return request<FIDO2Credential>('/api/v1/credentials/tokens', {
+    const res = await request<FIDO2Credential>('/api/v1/credentials/tokens', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+    if (res.success && res.data) {
+      saveLocalCustomKey(res.data);
+    }
+    return res;
   },
 
   toggleCredentialStatus: (credentialId: string, isActive: boolean, reason?: string) => {
