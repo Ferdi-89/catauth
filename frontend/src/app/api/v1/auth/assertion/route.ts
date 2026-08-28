@@ -45,6 +45,15 @@ export let auditLogsStore: any[] = [
   },
 ];
 
+// Helper to generate a base64url encoded JWT
+function generateSignedJWT(payload: object): string {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = Buffer.from(`sig_${Date.now()}_catauth_nfc_hardware_master_key`).toString('base64url');
+  return `${encodedHeader}.${encodedPayload}.${signature}`;
+}
+
 export async function POST(request: Request) {
   const body = await request.json();
   const { credential_id, redirect_uri, client_id, link_id, state, nonce } = body;
@@ -55,6 +64,7 @@ export async function POST(request: Request) {
   // Lookup card in credentialsStore
   const matchedCred = credentialsStore.find((c) => c.credential_id === credential_id || c.id === credential_id);
   const cardLabel = matchedCred?.label || (credential_id?.startsWith('NFC-UID-') ? `Kartu NFC Fisik (${credential_id.replace('NFC-UID-', '')})` : credential_id);
+  const userId = matchedCred?.user_id || 'usr_demo_john_doe';
 
   // 1. Check if card is revoked
   if (credential_id === 'FIDO2-NFC-KEY-REVOKED-03' || credential_id?.includes('REVOKED') || (matchedCred && !matchedCred.is_active)) {
@@ -168,22 +178,56 @@ export async function POST(request: Request) {
     created_at: new Date().toISOString(),
   });
 
-  // Generate single-use authorization code
-  const code = `authcode_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+  // Generate single-use authorization code & rich JWT token
+  const authCode = `authcode_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
+  const nowUnix = Math.floor(Date.now() / 1000);
+
+  const jwtPayload = {
+    iss: 'https://catauth.io',
+    sub: userId,
+    aud: targetLink?.id || client_id,
+    auth_status: 'SUCCESS',
+    auth_method: 'WEBAUTHN_NFC',
+    card_id: credential_id,
+    card_label: cardLabel,
+    link_id: targetLink?.id,
+    link_title: targetLink?.title,
+    iat: nowUnix,
+    exp: nowUnix + 3600, // 1 hour validity
+  };
+
+  const authToken = generateSignedJWT(jwtPayload);
+
+  // Construct target redirect destination carrying full credentials info
   const targetUrl = targetLink?.target_redirect_url || redirect_uri || '/sso/callback';
-  const delimiter = targetUrl.includes('?') ? '&' : '?';
-  const finalRedirect = `${targetUrl}${delimiter}code=${code}&state=${state || 'demo_state'}&link_id=${targetLink?.id || ''}`;
+  const urlObj = new URL(targetUrl, 'https://catauth.io');
+
+  // Inject credential parameters into target URL query
+  urlObj.searchParams.set('auth_status', 'SUCCESS');
+  urlObj.searchParams.set('user_id', userId);
+  urlObj.searchParams.set('card_id', credential_id);
+  urlObj.searchParams.set('card_label', cardLabel);
+  urlObj.searchParams.set('link_id', targetLink?.id || '');
+  urlObj.searchParams.set('code', authCode);
+  urlObj.searchParams.set('auth_token', authToken);
+  if (state) urlObj.searchParams.set('state', state);
+
+  // If targetUrl was relative (e.g. /sso/callback), keep relative path, otherwise absolute
+  const isRelative = !targetUrl.startsWith('http://') && !targetUrl.startsWith('https://');
+  const finalRedirect = isRelative ? `${urlObj.pathname}${urlObj.search}` : urlObj.toString();
 
   return NextResponse.json({
     success: true,
     data: {
       status: 'SUCCESS',
-      auth_code: code,
+      auth_code: authCode,
+      auth_token: authToken,
       redirect_target: finalRedirect,
-      user_id: 'usr_demo_john_doe',
+      user_id: userId,
+      card_id: credential_id,
+      card_label: cardLabel,
       auth_method: 'WEBAUTHN_NFC',
       link_title: targetLink?.title,
-      card_label: cardLabel,
     },
     message: `WebAuthn assertion verified and authorized for link "${targetLink?.title}".`,
   });

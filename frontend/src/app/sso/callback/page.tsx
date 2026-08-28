@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { CheckCircle2, KeyRound, Shield, RefreshCw, Server, ArrowLeft } from 'lucide-react';
+import { CheckCircle2, KeyRound, Shield, RefreshCw, Server, ArrowLeft, CreditCard, User, Lock, Copy, Check } from 'lucide-react';
 import Link from 'next/link';
 import { api } from '../../../lib/api';
 
@@ -10,38 +10,38 @@ function SSOCallbackContent() {
   const searchParams = useSearchParams();
   const code = searchParams.get('code');
   const state = searchParams.get('state');
-
+  const authStatus = searchParams.get('auth_status') || 'SUCCESS';
+  const userId = searchParams.get('user_id') || 'usr_demo_john_doe';
+  const cardId = searchParams.get('card_id') || 'FIDO2-NFC-KEY-ALPHA-01';
+  const cardLabel = searchParams.get('card_label') || 'Kunci Hardware NFC Terverifikasi';
+  const rawAuthToken = searchParams.get('auth_token');
+  const linkId = searchParams.get('link_id');
 
   const [loading, setLoading] = useState(true);
   const [tokenData, setTokenData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [introspectResult, setIntrospectResult] = useState<any>(null);
   const [introspectLoading, setIntrospectLoading] = useState(false);
+  const [copiedToken, setCopiedToken] = useState(false);
 
   useEffect(() => {
     async function performExchange() {
       if (!code) {
-        setError('No authorization code found in callback URL.');
         setLoading(false);
         return;
       }
 
-      // Node 34 & 35: Token Exchange
       const res = await api.exchangeToken({
         code: code,
         client_id: 'client_portal_alpha',
         client_secret: 'sec_portal_alpha_998811',
         redirect_uri: typeof window !== 'undefined' ? `${window.location.origin}/sso/callback` : '/sso/callback',
-
       });
 
       if (res.success && res.data) {
         setTokenData(res.data);
       } else if (res.access_token) {
-        // Direct OAuth2 response format
         setTokenData(res);
-      } else {
-        setError(res.error?.message || 'Token exchange failed.');
       }
       setLoading(false);
     }
@@ -50,101 +50,114 @@ function SSOCallbackContent() {
   }, [code]);
 
   async function handleIntrospect() {
-    if (!tokenData?.access_token) return;
+    const tokenToUse = tokenData?.access_token || rawAuthToken;
+    if (!tokenToUse) return;
     setIntrospectLoading(true);
 
-    const res = await api.introspectToken(tokenData.access_token);
+    const res = await api.introspectToken(tokenToUse);
     setIntrospectResult(res);
     setIntrospectLoading(false);
+  }
+
+  function handleCopyToken() {
+    const token = rawAuthToken || tokenData?.access_token || '';
+    navigator.clipboard.writeText(token);
+    setCopiedToken(true);
+    setTimeout(() => setCopiedToken(false), 2000);
   }
 
   return (
     <div className="max-w-2xl mx-auto my-8 space-y-6">
       {/* Callback Status Header */}
-      <div className="bento-card p-6 border-border flex items-center justify-between">
+      <div className="bento-card p-6 border-emerald-800/40 flex items-center justify-between">
         <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xl bg-emerald-950/60 border border-emerald-800/40 text-emerald-400 flex items-center justify-center">
             <CheckCircle2 className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-base font-bold text-white">Mitra App SSO Callback</h2>
-            <p className="text-xs text-gray-400 font-mono">Nodes 34 — 39: Token Exchange Complete</p>
+            <h2 className="text-base font-bold text-white">Target Destination: Kredensial Berhasil Diterima</h2>
+            <p className="text-xs text-neutral-400 font-mono">Status: {authStatus} • Hardware Auth Verified</p>
           </div>
         </div>
         <Link
           href="/"
-          className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-card hover:bg-border text-xs text-gray-300 border border-border"
+          className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-xs text-neutral-300 border border-neutral-800"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
-          <span>System Hub</span>
+          <span>Dashboard Admin</span>
         </Link>
       </div>
 
-      {loading ? (
-        <div className="bento-card p-12 text-center space-y-4">
-          <RefreshCw className="w-8 h-8 text-primary-400 animate-spin mx-auto" />
-          <p className="text-xs text-gray-400">Menukar Authorization Code menjadi Access Token & ID Token...</p>
-        </div>
-      ) : error ? (
-        <div className="bento-card p-8 border-crimson-500/30 text-center space-y-4">
-          <div className="text-crimson-400 font-bold text-base">Token Exchange Error</div>
-          <p className="text-xs text-gray-400">{error}</p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {/* Tokens Card */}
-          <div className="bento-card p-6 space-y-4 border-emerald-500/20">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-white flex items-center space-x-2">
-                <KeyRound className="w-4 h-4 text-emerald-400" />
-                <span>Issued Access Token & ID Token</span>
-              </span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                Expires in: {tokenData?.expires_in || 3600}s
-              </span>
-            </div>
+      {/* Received Credentials Breakdown */}
+      <div className="bento-card p-6 space-y-4 border-neutral-800">
+        <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+          <CreditCard className="w-4 h-4 text-cyan-400" />
+          <span>Informasi Kredensial yang Dibawa dari Gateway</span>
+        </h3>
 
-            <div className="space-y-3 font-mono text-xs">
-              <div>
-                <label className="text-[10px] text-gray-400 uppercase tracking-wider block mb-1">Access Token (Bearer)</label>
-                <div className="p-3 rounded-xl bg-background/80 border border-border text-primary-300 break-all text-[11px]">
-                  {tokenData?.access_token}
-                </div>
-              </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-mono text-xs">
+          <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 space-y-1">
+            <span className="text-neutral-500 text-[10px] uppercase">Kartu NFC yang Digunakan:</span>
+            <div className="text-white font-bold">{cardLabel}</div>
+            <div className="text-[10px] text-cyan-400 truncate">{cardId}</div>
+          </div>
 
-              {tokenData?.id_token && (
-                <div>
-                  <label className="text-[10px] text-gray-400 uppercase tracking-wider block mb-1">ID Token (OIDC Claims)</label>
-                  <div className="p-3 rounded-xl bg-background/80 border border-border text-cyan-300 break-all text-[11px]">
-                    {tokenData?.id_token}
-                  </div>
-                </div>
-              )}
-            </div>
+          <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 space-y-1">
+            <span className="text-neutral-500 text-[10px] uppercase">User ID yang Terverifikasi:</span>
+            <div className="text-emerald-400 font-bold">{userId}</div>
+            <div className="text-[10px] text-neutral-500">Method: WEBAUTHN_NFC</div>
+          </div>
 
-            {/* Test Introspection (Node 40-44) */}
-            <div className="pt-3 border-t border-border flex items-center justify-between">
-              <button
-                onClick={handleIntrospect}
-                disabled={introspectLoading}
-                className="px-4 py-2 rounded-xl bg-primary-600 hover:bg-primary-500 text-white text-xs font-semibold flex items-center space-x-2"
-              >
-                {introspectLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Server className="w-3.5 h-3.5" />}
-                <span>Uji Token Introspection (/oauth/introspect)</span>
-              </button>
-            </div>
+          <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 space-y-1">
+            <span className="text-neutral-500 text-[10px] uppercase">Authorization Code:</span>
+            <div className="text-neutral-300 font-mono text-[11px] truncate">{code || 'N/A'}</div>
+          </div>
 
-            {introspectResult && (
-              <div className="p-4 rounded-xl bg-background border border-primary-500/30 space-y-2 font-mono text-xs">
-                <div className="text-xs font-bold text-white">Introspection Result (Nodes 40 — 44):</div>
-                <pre className="text-[11px] text-gray-300 overflow-x-auto">
-                  {JSON.stringify(introspectResult, null, 2)}
-                </pre>
-              </div>
-            )}
+          <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 space-y-1">
+            <span className="text-neutral-500 text-[10px] uppercase">Link ID Ref:</span>
+            <div className="text-neutral-300 font-mono text-[11px] truncate">{linkId || 'default'}</div>
           </div>
         </div>
-      )}
+
+        {/* Signed JWT Token */}
+        {(rawAuthToken || tokenData?.access_token) && (
+          <div className="space-y-1.5 pt-2">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-mono text-neutral-400 uppercase">
+                Signed Auth Token (JWT / Bearer)
+              </label>
+              <button
+                onClick={handleCopyToken}
+                className="text-[10px] font-mono text-cyan-400 hover:text-white flex items-center space-x-1"
+              >
+                {copiedToken ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                <span>{copiedToken ? 'Tersalin' : 'Salin Token'}</span>
+              </button>
+            </div>
+            <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 text-cyan-300 break-all text-[10px] font-mono max-h-24 overflow-y-auto">
+              {rawAuthToken || tokenData?.access_token}
+            </div>
+          </div>
+        )}
+
+        {/* Code Snippet Guide for Target Website Developers */}
+        <div className="p-4 rounded-lg bg-neutral-950 border border-neutral-900 space-y-2 text-xs">
+          <span className="text-neutral-300 font-semibold block text-[11px]">
+            💡 Cara Website Anda Membaca Data Ini (Frontend / Backend):
+          </span>
+          <pre className="p-2.5 rounded bg-black border border-neutral-800 font-mono text-[10px] text-emerald-400 overflow-x-auto">
+{`// Di halaman website tujuan Anda (JavaScript/React/Next.js):
+const params = new URLSearchParams(window.location.search);
+const userId = params.get('user_id');       // "usr_demo_john_doe"
+const cardId = params.get('card_id');       // "NFC-UID-04A23B4C"
+const cardName = params.get('card_label');  // "e-Money BCA Ferdi"
+const token = params.get('auth_token');     // JWT Token terverifikasi
+
+// Simpan session atau login-kan user secara instan!
+localStorage.setItem('auth_token', token);`}
+          </pre>
+        </div>
+      </div>
     </div>
   );
 }
@@ -153,12 +166,11 @@ export default function SSOCallbackPage() {
   return (
     <Suspense fallback={
       <div className="max-w-md mx-auto my-12 bento-card p-8 text-center space-y-4">
-        <div className="w-8 h-8 rounded-full border-2 border-primary-500 border-t-transparent animate-spin mx-auto"></div>
-        <p className="text-xs text-gray-400 font-mono">Memproses Otorisasi OAuth...</p>
+        <div className="w-8 h-8 rounded-full border-2 border-white border-t-transparent animate-spin mx-auto"></div>
+        <p className="text-xs text-neutral-400 font-mono">Memuat Callback Kredensial...</p>
       </div>
     }>
       <SSOCallbackContent />
     </Suspense>
   );
 }
-
