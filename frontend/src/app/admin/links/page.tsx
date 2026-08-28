@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Link2, Plus, ExternalLink, ShieldCheck, Key, RefreshCw, 
   Trash2, Edit3, CheckCircle2, Copy, Check, Lock, Smartphone, Globe, ShieldAlert,
-  CreditCard, Cpu, AlertTriangle
+  CreditCard, Cpu, AlertTriangle, Sparkles
 } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { ProtectedLink, FIDO2Credential } from '../../../lib/types';
@@ -23,7 +23,7 @@ export default function AdminLinksPage() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [targetUrl, setTargetUrl] = useState('');
-  const [selectedCards, setSelectedCards] = useState<string[]>([]);
+  const [selectedCards, setSelectedCards] = useState<string[]>(['*']);
   const [requirePin, setRequirePin] = useState(false);
   const [geofenceEnabled, setGeofenceEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -63,7 +63,7 @@ export default function AdminLinksPage() {
     setTitle('');
     setDescription('');
     setTargetUrl('https://example.com/target-dashboard');
-    setSelectedCards(['FIDO2-NFC-KEY-ALPHA-01']); // Default to Alpha
+    setSelectedCards(['*']); // Default to all cards allowed for easiest onboarding!
     setRequirePin(false);
     setGeofenceEnabled(false);
     setShowModal(true);
@@ -76,7 +76,7 @@ export default function AdminLinksPage() {
     setTitle(link.title);
     setDescription(link.description);
     setTargetUrl(link.target_redirect_url);
-    setSelectedCards(link.allowed_card_ids || []);
+    setSelectedCards(link.allowed_card_ids && link.allowed_card_ids.length > 0 ? link.allowed_card_ids : ['*']);
     setRequirePin(link.require_pin);
     setGeofenceEnabled(link.geofence_enabled);
     setShowModal(true);
@@ -154,7 +154,7 @@ export default function AdminLinksPage() {
   // 1-Tap Physical NFC Direct Scan inside Modal (Web NFC)
   async function handleTapScanPhysicalCard() {
     if (typeof window === 'undefined' || !('NDEFReader' in window)) {
-      alert('Fitur Web NFC langsung memerlukan Google Chrome pada HP Android ber-NFC. Untuk browser lain, Anda dapat menggunakan tombol FIDO2 atau Input Manual.');
+      alert('Fitur Web NFC langsung memerlukan Google Chrome pada HP Android ber-NFC.');
       return;
     }
 
@@ -195,7 +195,7 @@ export default function AdminLinksPage() {
             setCredentials(updatedCreds.data);
           }
           // Automatically select/check this new card in the whitelist!
-          setSelectedCards((prev) => Array.from(new Set([...prev, credId])));
+          setSelectedCards((prev) => Array.from(new Set([...prev.filter((c) => c !== '*'), credId])));
           setModalFeedback(`Kartu "${finalLabel}" [${credId}] berhasil didaftarkan dan OTOMATIS dicentang dalam whitelist link ini!`);
         } else {
           alert(res.error?.message || 'Gagal menyimpan kartu ke database.');
@@ -259,7 +259,7 @@ export default function AdminLinksPage() {
           if (updatedCreds.data) {
             setCredentials(updatedCreds.data);
           }
-          setSelectedCards((prev) => Array.from(new Set([...prev, shortCredId])));
+          setSelectedCards((prev) => Array.from(new Set([...prev.filter((c) => c !== '*'), shortCredId])));
           setModalFeedback(`Kunci FIDO2 "${finalLabel}" berhasil didaftarkan dan OTOMATIS dicentang!`);
         }
       }
@@ -289,13 +289,15 @@ export default function AdminLinksPage() {
       if (updatedCreds.data) {
         setCredentials(updatedCreds.data);
       }
-      setSelectedCards([...selectedCards, credId]);
+      setSelectedCards([...selectedCards.filter((c) => c !== '*'), credId]);
       setShowAddCard(false);
       setNewCardLabel('');
       setNewCardId('');
       setModalFeedback(`Kartu "${newCardLabel}" berhasil ditambahkan dan dicentang.`);
     }
   }
+
+  const isAllAllowed = selectedCards.includes('*') || selectedCards.length === 0;
 
   return (
     <div className="space-y-8 pb-16">
@@ -349,6 +351,8 @@ export default function AdminLinksPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {links.map((link) => {
             const isCopied = copiedId === link.id;
+            const allowsAll = !link.allowed_card_ids || link.allowed_card_ids.length === 0 || link.allowed_card_ids.includes('*');
+
             return (
               <div
                 key={link.id}
@@ -417,27 +421,31 @@ export default function AdminLinksPage() {
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-neutral-400 font-mono flex items-center space-x-1">
                         <Key className="w-3.5 h-3.5 text-neutral-400" />
-                        <span>Whitelist Kartu NFC ({link.allowed_card_ids?.length || 0})</span>
+                        <span>
+                          Whitelist Kartu: {allowsAll ? 'Semua Kartu Terdaftar (*)' : `(${link.allowed_card_ids?.length || 0} Kartu Khusus)`}
+                        </span>
                       </span>
                     </div>
 
                     <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-                      {link.allowed_card_ids?.map((cardId) => {
-                        const credObj = credentials.find((c) => c.credential_id === cardId);
-                        return (
-                          <span
-                            key={cardId}
-                            className="inline-flex items-center space-x-1 text-[10px] font-mono px-2 py-1 rounded bg-neutral-900 text-neutral-300 border border-neutral-800"
-                          >
-                            <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                            <span>{credObj ? credObj.label : cardId}</span>
-                          </span>
-                        );
-                      })}
-                      {(!link.allowed_card_ids || link.allowed_card_ids.length === 0) && (
-                        <span className="text-[11px] text-red-400 font-mono">
-                          ⚠️ Belum ada kartu yang diizinkan (Akses akan ditolak)
+                      {allowsAll ? (
+                        <span className="inline-flex items-center space-x-1 text-[10px] font-mono px-2 py-1 rounded bg-cyan-950/40 text-cyan-300 border border-cyan-800/40">
+                          <Sparkles className="w-3 h-3 text-cyan-400" />
+                          <span>Izinkan Semua Kartu Terdaftar (Universal)</span>
                         </span>
+                      ) : (
+                        link.allowed_card_ids?.map((cardId) => {
+                          const credObj = credentials.find((c) => c.credential_id === cardId);
+                          return (
+                            <span
+                              key={cardId}
+                              className="inline-flex items-center space-x-1 text-[10px] font-mono px-2 py-1 rounded bg-neutral-900 text-neutral-300 border border-neutral-800"
+                            >
+                              <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                              <span>{credObj ? credObj.label : cardId}</span>
+                            </span>
+                          );
+                        })
                       )}
                     </div>
                   </div>
@@ -637,7 +645,45 @@ export default function AdminLinksPage() {
 
                 {/* List of Known Cards Checkboxes */}
                 <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 space-y-2 max-h-48 overflow-y-auto">
-                  {credentials.map((cred) => {
+                  {/* Option 1: Wildcard (Allow All Registered Cards) */}
+                  <label
+                    className={`flex items-center justify-between p-2.5 rounded cursor-pointer transition-colors border ${
+                      isAllAllowed 
+                        ? 'bg-cyan-950/40 border-cyan-800/60 text-cyan-300' 
+                        : 'bg-neutral-900/40 border-neutral-800 text-neutral-300 hover:bg-neutral-900'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2.5">
+                      <input
+                        type="checkbox"
+                        checked={isAllAllowed}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedCards(['*']);
+                          } else {
+                            setSelectedCards(credentials.map((c) => c.credential_id));
+                          }
+                        }}
+                        className="rounded border-neutral-700 bg-neutral-800 text-cyan-400 focus:ring-0"
+                      />
+                      <div>
+                        <span className="text-xs font-bold block flex items-center space-x-1">
+                          <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Izinkan Semua Kartu Terdaftar (Rekomendasi)</span>
+                        </span>
+                        <span className="text-[10px] text-neutral-400">
+                          Setiap kartu aktif yang terdaftar di sistem dapat langsung login
+                        </span>
+                      </div>
+                    </div>
+
+                    <span className="text-[9px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800/40 font-bold">
+                      UNIVERSAL
+                    </span>
+                  </label>
+
+                  {/* Specific Registered Cards */}
+                  {!isAllAllowed && credentials.map((cred) => {
                     const isChecked = selectedCards.includes(cred.credential_id);
                     return (
                       <label
@@ -652,7 +698,7 @@ export default function AdminLinksPage() {
                             checked={isChecked}
                             onChange={(e) => {
                               if (e.target.checked) {
-                                setSelectedCards([...selectedCards, cred.credential_id]);
+                                setSelectedCards([...selectedCards.filter((c) => c !== '*'), cred.credential_id]);
                               } else {
                                 setSelectedCards(selectedCards.filter((id) => id !== cred.credential_id));
                               }
@@ -720,7 +766,7 @@ export default function AdminLinksPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={saving || selectedCards.length === 0}
+                  disabled={saving}
                   className="px-5 py-2 rounded-md bg-white hover:bg-neutral-200 disabled:opacity-50 text-black text-xs font-semibold"
                 >
                   {saving ? 'Menyimpan...' : editingLink ? 'Simpan Perubahan' : 'Buat Protected Link'}

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { protectedLinksStore } from '../../links/route';
 import { credentialsStore } from '../../credentials/tokens/route';
 import { auditLogsStore } from '../assertion/route';
+import { db, isSupabaseConfigured } from '../../../../../lib/supabase';
 
 // CORS response helper
 function corsResponse(data: any, status = 200) {
@@ -48,10 +49,38 @@ export async function POST(request: Request) {
       ? card_id 
       : `NFC-UID-${card_id.replace(/:/g, '').toUpperCase()}`;
 
+    // Rehydrate from Supabase if configured
+    let allCreds = credentialsStore;
+    if (isSupabaseConfigured()) {
+      const sbCreds = await db.getCredentials();
+      if (sbCreds && sbCreds.length > 0) {
+        allCreds = sbCreds;
+      }
+    }
+
     // Lookup card in credentialsStore
-    const matchedCred = credentialsStore.find(
+    let matchedCred = allCreds.find(
       (c) => c.credential_id === normalizedCardId || c.credential_id === card_id || c.id === card_id
     );
+
+    // If not found in store but has valid hardware UID, auto-register as new pending card
+    if (!matchedCred && normalizedCardId.startsWith('NFC-UID-')) {
+      const newAutoCred = {
+        id: `cred_${Date.now()}`,
+        user_id: 'usr_demo_john_doe',
+        credential_id: normalizedCardId,
+        label: `Kartu Fisik (${normalizedCardId.replace('NFC-UID-', '')})`,
+        sign_count: 0,
+        transports: ['nfc'],
+        is_active: true,
+        created_at: new Date().toISOString(),
+      };
+      credentialsStore.push(newAutoCred);
+      if (isSupabaseConfigured()) {
+        db.insertCredential(newAutoCred);
+      }
+      matchedCred = newAutoCred;
+    }
 
     const cardLabel = matchedCred?.label || `Kartu NFC Fisik (${normalizedCardId.replace('NFC-UID-', '')})`;
     const userId = matchedCred?.user_id || 'usr_demo_john_doe';
@@ -75,18 +104,36 @@ export async function POST(request: Request) {
         error: {
           code: 'CARD_REVOKED',
           message: `Kartu hardware "${cardLabel}" (${normalizedCardId}) telah dicabut / dinonaktifkan oleh administrator.`,
+          detected_card_id: normalizedCardId,
         },
       }, 403);
     }
 
     // 2. Check Link Whitelist (if link_id is provided)
     if (link_id) {
-      const targetLink = protectedLinksStore.find((l) => l.id === link_id || l.slug === link_id);
-      if (targetLink && targetLink.allowed_card_ids && targetLink.allowed_card_ids.length > 0) {
-        const isAllowed = targetLink.allowed_card_ids.includes(normalizedCardId) ||
-          (matchedCred && targetLink.allowed_card_ids.includes(matchedCred.credential_id));
+      let allLinks = protectedLinksStore;
+      if (isSupabaseConfigured()) {
+        const sbLinks = await db.getProtectedLinks();
+        if (sbLinks && sbLinks.length > 0) {
+          allLinks = sbLinks;
+        }
+      }
 
-        if (!isAllowed) {
+      const targetLink = allLinks.find((l) => l.id === link_id || l.slug === link_id);
+      if (targetLink) {
+        // If allowed_card_ids is empty or includes '*', allow all registered cards!
+        const isWildcardAllowed = !targetLink.allowed_card_ids || 
+          targetLink.allowed_card_ids.length === 0 || 
+          targetLink.allowed_card_ids.includes('*') ||
+          targetLink.allowed_card_ids.includes('ALL');
+
+        const isExplicitlyAllowed = targetLink.allowed_card_ids && (
+          targetLink.allowed_card_ids.includes(normalizedCardId) ||
+          targetLink.allowed_card_ids.includes(card_id) ||
+          (matchedCred && targetLink.allowed_card_ids.includes(matchedCred.credential_id))
+        );
+
+        if (!isWildcardAllowed && !isExplicitlyAllowed) {
           targetLink.total_taps += 1;
           targetLink.blocked_attempts += 1;
 
@@ -107,14 +154,18 @@ export async function POST(request: Request) {
             authenticated: false,
             error: {
               code: 'UNAUTHORIZED_FOR_LINK',
-              message: `Kartu "${cardLabel}" (${normalizedCardId}) belum didaftarkan dalam whitelist link "${targetLink.title}".`,
+              message: `Kartu "${cardLabel}" (${normalizedCardId}) belum didaftarkan dalam whitelist link "${targetLink.title}". Silakan buka menu Links di dashboard Catauth dan centang kartu ini.`,
               detected_card_id: normalizedCardId,
+              link_title: targetLink.title,
             },
           }, 403);
         }
 
         targetLink.total_taps += 1;
         targetLink.successful_passes += 1;
+        if (isSupabaseConfigured()) {
+          db.upsertProtectedLink(targetLink);
+        }
       }
     }
 
@@ -142,7 +193,7 @@ export async function POST(request: Request) {
 
     const authToken = generateSignedJWT(jwtPayload);
 
-    auditLogsStore.unshift({
+    const logEntry = {
       id: `log_${Date.now()}`,
       event_type: 'API_DIRECT_LOGIN_SUCCESS',
       link_id: link_id || 'api_direct',
@@ -151,7 +202,11 @@ export async function POST(request: Request) {
       ip_address: '114.122.34.19',
       status: 'SUCCESS',
       created_at: new Date().toISOString(),
-    });
+    };
+    auditLogsStore.unshift(logEntry);
+    if (isSupabaseConfigured()) {
+      db.insertAuditLog(logEntry);
+    }
 
     return corsResponse({
       success: true,
