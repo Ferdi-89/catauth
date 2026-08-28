@@ -14,7 +14,7 @@ function generateAdminToken(user: any): string {
     sub: user.user_id,
     name: user.name,
     email: user.email,
-    role: 'ADMIN',
+    role: user.role || 'ADMIN',
     aud: 'catauth_admin_portal',
     iat: nowUnix,
     exp: nowUnix + 86400 * 7, // 7 days session
@@ -81,51 +81,57 @@ export async function POST(request: Request) {
       }
     }
 
-    // Find card
-    let matchedCred = allCreds.find(
+    // Strict Lookup: Find card in registered credentials
+    const matchedCred = allCreds.find(
       (c) => c.credential_id === normalizedCardId || c.credential_id === card_id || c.id === card_id
     );
 
-    // If not found in database, automatically grant and register if it's the first physical setup
-    if (!matchedCred && normalizedCardId.startsWith('NFC-UID-')) {
-      const newAdminCred = {
-        id: `cred_${Date.now()}`,
-        user_id: 'usr_ferdi_admin',
-        user_name: 'Ferdi Pratama',
-        user_email: 'ferdi@catauth.io',
-        user_role: 'ADMIN',
-        credential_id: normalizedCardId,
-        label: `Kunci Master Admin (${normalizedCardId.replace('NFC-UID-', '')})`,
-        sign_count: 1,
-        transports: ['nfc'],
-        is_active: true,
-        created_at: new Date().toISOString(),
-      };
-      credentialsStore.push(newAdminCred);
-      if (isSupabaseConfigured()) {
-        db.insertCredential(newAdminCred);
-      }
-      matchedCred = newAdminCred;
+    // STRICT CHECK 1: If card is NOT registered, REJECT!
+    if (!matchedCred) {
+      return NextResponse.json({
+        success: false,
+        authenticated: false,
+        error: {
+          code: 'CARD_NOT_REGISTERED',
+          message: `Kartu hardware (UID: ${normalizedCardId}) belum terdaftar sebagai Kunci Akses Admin. Silakan masuk menggunakan Master Passcode terlebih dahulu dan daftarkan kartu ini di menu Keys.`,
+          detected_card_id: normalizedCardId,
+        },
+      }, 401);
     }
 
-    if (matchedCred && !matchedCred.is_active) {
+    // STRICT CHECK 2: If card is Revoked, REJECT!
+    if (!matchedCred.is_active) {
       return NextResponse.json({
         success: false,
         authenticated: false,
         error: {
           code: 'CARD_REVOKED',
-          message: `Kartu hardware ${matchedCred.label} telah dinonaktifkan / dicabut oleh sistem.`,
+          message: `Kartu hardware "${matchedCred.label}" telah dinonaktifkan / dicabut oleh sistem.`,
+          detected_card_id: normalizedCardId,
+        },
+      }, 403);
+    }
+
+    // STRICT CHECK 3: If card role is NOT ADMIN, REJECT!
+    if (matchedCred.user_role && matchedCred.user_role !== 'ADMIN') {
+      return NextResponse.json({
+        success: false,
+        authenticated: false,
+        error: {
+          code: 'INSUFFICIENT_PERMISSIONS',
+          message: `Kartu "${matchedCred.label}" terdaftar untuk pengguna "${matchedCred.user_name}", tetapi role saat ini adalah "${matchedCred.user_role}" (bukan ADMIN).`,
+          detected_card_id: normalizedCardId,
         },
       }, 403);
     }
 
     const adminUser = {
-      user_id: matchedCred?.user_id || 'usr_ferdi_admin',
-      name: matchedCred?.user_name || matchedCred?.label || 'Ferdi Pratama',
-      email: matchedCred?.user_email || 'ferdi@catauth.io',
-      role: matchedCred?.user_role || 'ADMIN',
+      user_id: matchedCred.user_id,
+      name: matchedCred.user_name || matchedCred.label,
+      email: matchedCred.user_email || `${matchedCred.user_id}@catauth.io`,
+      role: matchedCred.user_role || 'ADMIN',
       card_id: normalizedCardId,
-      card_label: matchedCred?.label || 'Kunci Hardware Fisik',
+      card_label: matchedCred.label,
       auth_method: 'HARDWARE_NFC_TAP',
     };
 
@@ -136,7 +142,7 @@ export async function POST(request: Request) {
       authenticated: true,
       user: adminUser,
       token,
-      message: `Verifikasi Kunci Hardware Berhasil. Selamat datang, ${adminUser.name}!`,
+      message: `Verifikasi Kunci Hardware Berhasil. Selamat datang, Administrator ${adminUser.name}!`,
     });
   } catch (err: any) {
     return NextResponse.json({
