@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Shield, Radio, Layers, Key, Server, Terminal, Sliders, AlertCircle, Link2, Lock } from 'lucide-react';
+import { Shield, Radio, Layers, Key, Server, Terminal, Sliders, AlertCircle, Link2, Lock, Code2 } from 'lucide-react';
 
 export function Navigation() {
   const pathname = usePathname();
@@ -49,6 +49,7 @@ export function Navigation() {
   const navItems = [
     { label: 'Overview', href: '/', icon: Layers },
     { label: 'Links', href: '/admin/links', icon: Link2 },
+    { label: 'Embed API', href: '/admin/embed', icon: Code2 },
     { label: 'Telemetry', href: '/admin/dashboard', icon: Server },
     { label: 'Topology 72N', href: '/admin/topology', icon: Layers },
     { label: 'Clients', href: '/admin/clients', icon: Shield },
@@ -109,10 +110,10 @@ export function Navigation() {
             </div>
 
             <Link
-              href="/admin/links"
+              href="/admin/embed"
               className="px-3 py-1 rounded-md text-xs font-medium bg-white text-black hover:bg-neutral-200 transition-colors"
             >
-              Kelola Links
+              Get Embed Code
             </Link>
           </div>
         </div>
