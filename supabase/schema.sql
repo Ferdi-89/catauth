@@ -5,7 +5,10 @@
 -- 1. Table: credentials (Hardware NFC Keys & Passkeys Vault)
 CREATE TABLE IF NOT EXISTS public.credentials (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL DEFAULT 'usr_demo_john_doe',
+    user_id TEXT NOT NULL DEFAULT 'usr_ferdi_admin',
+    user_name TEXT DEFAULT 'Ferdi Pratama',
+    user_email TEXT DEFAULT 'ferdi@catauth.io',
+    user_role TEXT DEFAULT 'ADMIN',
     credential_id TEXT UNIQUE NOT NULL,
     label TEXT NOT NULL,
     sign_count BIGINT DEFAULT 0,
@@ -18,12 +21,17 @@ CREATE TABLE IF NOT EXISTS public.credentials (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Ensure columns exist if table was created previously
+ALTER TABLE public.credentials ADD COLUMN IF NOT EXISTS user_name TEXT;
+ALTER TABLE public.credentials ADD COLUMN IF NOT EXISTS user_email TEXT;
+ALTER TABLE public.credentials ADD COLUMN IF NOT EXISTS user_role TEXT DEFAULT 'ADMIN';
+
 -- Seed default initial cards
-INSERT INTO public.credentials (id, user_id, credential_id, label, sign_count, transports, is_active)
+INSERT INTO public.credentials (id, user_id, user_name, user_email, user_role, credential_id, label, sign_count, transports, is_active)
 VALUES 
-  ('cred_01', 'usr_demo_john_doe', 'FIDO2-NFC-KEY-ALPHA-01', 'YubiKey 5 NFC (Alpha Key)', 0, ARRAY['nfc', 'usb'], TRUE),
-  ('cred_02', 'usr_demo_john_doe', 'FIDO2-NFC-KEY-BETA-02', 'Feitian ePass FIDO2 (Beta Key)', 42, ARRAY['nfc'], TRUE),
-  ('cred_03', 'usr_demo_john_doe', 'FIDO2-NFC-KEY-REVOKED-03', 'Compromised Token (Test Revoked)', 105, ARRAY['nfc'], FALSE)
+  ('cred_01', 'usr_ferdi_admin', 'Ferdi Pratama', 'ferdi@catauth.io', 'ADMIN', 'FIDO2-NFC-KEY-ALPHA-01', 'YubiKey 5 NFC (Alpha Key)', 0, ARRAY['nfc', 'usb'], TRUE),
+  ('cred_02', 'usr_staff_budi', 'Budi Santoso', 'budi@catauth.io', 'STAFF', 'FIDO2-NFC-KEY-BETA-02', 'Feitian ePass FIDO2 (Beta Key)', 42, ARRAY['nfc'], TRUE),
+  ('cred_03', 'usr_demo_john_doe', 'Compromised User', 'revoked@catauth.io', 'OPERATOR', 'FIDO2-NFC-KEY-REVOKED-03', 'Compromised Token (Test Revoked)', 105, ARRAY['nfc'], FALSE)
 ON CONFLICT (credential_id) DO NOTHING;
 
 
@@ -48,8 +56,8 @@ CREATE TABLE IF NOT EXISTS public.protected_links (
 -- Seed default protected links
 INSERT INTO public.protected_links (id, slug, title, description, target_redirect_url, allowed_card_ids, require_pin, geofence_enabled, is_active, total_taps, successful_passes, blocked_attempts)
 VALUES 
-  ('lnk_alpha_portal', 'portal-produksi', 'Portal Karyawan Produksi', 'Gateway akses dashboard internal karyawan shift 1 & 2', 'https://catauth.vercel.app/sso/callback', ARRAY['FIDO2-NFC-KEY-ALPHA-01', 'FIDO2-NFC-KEY-BETA-02'], FALSE, TRUE, TRUE, 128, 124, 4),
-  ('lnk_secret_vault', 'brankas-vip', 'Brankas Data VIP & API Keys', 'Akses otorisasi brankas kunci enkripsi master level 4', 'https://catauth.vercel.app/sso/callback', ARRAY['FIDO2-NFC-KEY-ALPHA-01'], TRUE, TRUE, TRUE, 45, 41, 4)
+  ('lnk_alpha_portal', 'portal-produksi', 'Portal Karyawan Produksi', 'Gateway akses dashboard internal karyawan shift 1 & 2', 'https://catauth.vercel.app/sso/callback', ARRAY['*'], FALSE, TRUE, TRUE, 128, 124, 4),
+  ('lnk_secret_vault', 'brankas-vip', 'Brankas Data VIP & API Keys', 'Akses otorisasi brankas kunci enkripsi master level 4', 'https://catauth.vercel.app/sso/callback', ARRAY['*'], TRUE, TRUE, TRUE, 45, 41, 4)
 ON CONFLICT (id) DO NOTHING;
 
 
@@ -76,6 +84,10 @@ ALTER TABLE public.protected_links ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 
 -- Allow anon read and write (or service role)
+DROP POLICY IF EXISTS "Allow all access to credentials" ON public.credentials;
+DROP POLICY IF EXISTS "Allow all access to protected_links" ON public.protected_links;
+DROP POLICY IF EXISTS "Allow all access to audit_logs" ON public.audit_logs;
+
 CREATE POLICY "Allow all access to credentials" ON public.credentials FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all access to protected_links" ON public.protected_links FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all access to audit_logs" ON public.audit_logs FOR ALL USING (true) WITH CHECK (true);

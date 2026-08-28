@@ -46,9 +46,9 @@ export const db = {
       if (error) throw error;
       return (data || []).map((row: any) => ({
         id: row.id,
-        user_id: row.user_id,
-        user_name: row.user_name || row.label,
-        user_email: row.user_email || `${row.user_id}@catauth.io`,
+        user_id: row.user_id || 'usr_ferdi_admin',
+        user_name: row.user_name || row.label || 'Ferdi Pratama',
+        user_email: row.user_email || `${row.user_id || 'ferdi'}@catauth.io`,
         user_role: row.user_role || 'ADMIN',
         credential_id: row.credential_id,
         label: row.label,
@@ -69,24 +69,38 @@ export const db = {
     const sb = getSupabase();
     if (!sb) return null;
     try {
+      const upsertPayload: any = {
+        id: cred.id,
+        user_id: cred.user_id || 'usr_ferdi_admin',
+        credential_id: cred.credential_id,
+        label: cred.label,
+        sign_count: cred.sign_count || 0,
+        transports: cred.transports || ['nfc'],
+        is_active: cred.is_active ?? true,
+        created_at: cred.created_at || new Date().toISOString(),
+      };
+
+      if (cred.user_name) upsertPayload.user_name = cred.user_name;
+      if (cred.user_email) upsertPayload.user_email = cred.user_email;
+      if (cred.user_role) upsertPayload.user_role = cred.user_role;
+
       const { data, error } = await sb
         .from('credentials')
-        .upsert({
-          id: cred.id,
-          user_id: cred.user_id,
-          user_name: cred.user_name || cred.label,
-          user_email: cred.user_email || `${cred.user_id}@catauth.io`,
-          user_role: cred.user_role || 'ADMIN',
-          credential_id: cred.credential_id,
-          label: cred.label,
-          sign_count: cred.sign_count || 0,
-          transports: cred.transports || ['nfc'],
-          is_active: cred.is_active ?? true,
-          created_at: cred.created_at || new Date().toISOString(),
-        }, { onConflict: 'credential_id' })
+        .upsert(upsertPayload, { onConflict: 'credential_id' })
         .select()
         .single();
-      if (error) throw error;
+      if (error) {
+        // Fallback without user_name / email / role if columns don't exist yet in Supabase
+        delete upsertPayload.user_name;
+        delete upsertPayload.user_email;
+        delete upsertPayload.user_role;
+        const fallbackRes = await sb
+          .from('credentials')
+          .upsert(upsertPayload, { onConflict: 'credential_id' })
+          .select()
+          .single();
+        return fallbackRes.data as FIDO2Credential;
+      }
       return data as FIDO2Credential;
     } catch (err) {
       console.warn('Supabase insertCredential error:', err);
@@ -119,18 +133,32 @@ export const db = {
     const sb = getSupabase();
     if (!sb) return null;
     try {
+      const updateData: any = {
+        user_id: updates.user_id,
+        label: updates.label,
+      };
+      if (updates.user_name) updateData.user_name = updates.user_name;
+      if (updates.user_email) updateData.user_email = updates.user_email;
+      if (updates.user_role) updateData.user_role = updates.user_role;
+
       const { data, error } = await sb
         .from('credentials')
-        .update({
-          user_id: updates.user_id,
-          user_name: updates.user_name,
-          user_email: updates.user_email,
-          user_role: updates.user_role,
-          label: updates.label,
-        })
+        .update(updateData)
         .or(`credential_id.eq.${credentialId},id.eq.${credentialId}`)
         .select();
-      if (error) throw error;
+      
+      if (error) {
+        // Fallback: update only base columns
+        delete updateData.user_name;
+        delete updateData.user_email;
+        delete updateData.user_role;
+        const fallback = await sb
+          .from('credentials')
+          .update(updateData)
+          .or(`credential_id.eq.${credentialId},id.eq.${credentialId}`)
+          .select();
+        return fallback.data;
+      }
       return data;
     } catch (err) {
       console.warn('Supabase updateCredentialProfile error:', err);
@@ -154,7 +182,7 @@ export const db = {
         title: row.title,
         description: row.description || '',
         target_redirect_url: row.target_redirect_url,
-        allowed_card_ids: row.allowed_card_ids || [],
+        allowed_card_ids: row.allowed_card_ids || ['*'],
         require_pin: Boolean(row.require_pin),
         geofence_enabled: Boolean(row.geofence_enabled),
         is_active: row.is_active ?? true,
@@ -181,7 +209,7 @@ export const db = {
           title: link.title,
           description: link.description || '',
           target_redirect_url: link.target_redirect_url,
-          allowed_card_ids: link.allowed_card_ids || [],
+          allowed_card_ids: link.allowed_card_ids || ['*'],
           require_pin: Boolean(link.require_pin),
           geofence_enabled: Boolean(link.geofence_enabled),
           is_active: link.is_active ?? true,
