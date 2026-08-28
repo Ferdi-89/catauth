@@ -1,32 +1,39 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import Link from 'next/link';
 import { 
-  Plus, Link2, ExternalLink, Copy, Check, Shield, Key, 
-  Trash2, Edit3, Activity, ArrowRight, ToggleLeft, ToggleRight, Sparkles 
+  Link2, Plus, ExternalLink, ShieldCheck, Key, RefreshCw, 
+  Trash2, Edit3, CheckCircle2, Copy, Check, Lock, Smartphone, Globe, ShieldAlert,
+  CreditCard, Cpu, AlertTriangle
 } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { ProtectedLink, FIDO2Credential } from '../../../lib/types';
 
-export default function ProtectedLinksPage() {
+export default function AdminLinksPage() {
   const [links, setLinks] = useState<ProtectedLink[]>([]);
   const [credentials, setCredentials] = useState<FIDO2Credential[]>([]);
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Modal State
+  // Modal State for Create / Edit
   const [showModal, setShowModal] = useState(false);
   const [editingLink, setEditingLink] = useState<ProtectedLink | null>(null);
-  const [title, setTitle] = useState('');
-  const [slug, setSlug] = useState('');
-  const [targetUrl, setTargetUrl] = useState('/sso/callback');
-  const [selectedCards, setSelectedCards] = useState<string[]>(['FIDO2-NFC-KEY-ALPHA-01']);
-  const [requirePin, setRequirePin] = useState(false);
-  const [geofenceEnabled, setGeofenceEnabled] = useState(true);
-  const [formSubmitting, setFormSubmitting] = useState(false);
 
-  // Inline New Card Registration Modal
+  // Form State
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [targetUrl, setTargetUrl] = useState('');
+  const [selectedCards, setSelectedCards] = useState<string[]>([]);
+  const [requirePin, setRequirePin] = useState(false);
+  const [geofenceEnabled, setGeofenceEnabled] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Modal NFC Scan State
+  const [scanningNFCInModal, setScanningNFCInModal] = useState(false);
+  const [registeringWebAuthnInModal, setRegisteringWebAuthnInModal] = useState(false);
+  const [modalFeedback, setModalFeedback] = useState<string | null>(null);
+
+  // Manual Add Card Form inside Modal
   const [showAddCard, setShowAddCard] = useState(false);
   const [newCardLabel, setNewCardLabel] = useState('');
   const [newCardId, setNewCardId] = useState('');
@@ -54,38 +61,40 @@ export default function ProtectedLinksPage() {
   function handleOpenCreate() {
     setEditingLink(null);
     setTitle('');
-    setSlug('');
-    setTargetUrl('/sso/callback');
-    setSelectedCards(['FIDO2-NFC-KEY-ALPHA-01']);
+    setDescription('');
+    setTargetUrl('https://example.com/target-dashboard');
+    setSelectedCards(['FIDO2-NFC-KEY-ALPHA-01']); // Default to Alpha
     setRequirePin(false);
-    setGeofenceEnabled(true);
+    setGeofenceEnabled(false);
     setShowModal(true);
+    setShowAddCard(false);
+    setModalFeedback(null);
   }
 
   function handleOpenEdit(link: ProtectedLink) {
     setEditingLink(link);
     setTitle(link.title);
-    setSlug(link.slug);
+    setDescription(link.description);
     setTargetUrl(link.target_redirect_url);
     setSelectedCards(link.allowed_card_ids || []);
     setRequirePin(link.require_pin);
     setGeofenceEnabled(link.geofence_enabled);
     setShowModal(true);
+    setShowAddCard(false);
+    setModalFeedback(null);
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmitLink(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim() || !targetUrl.trim()) return;
-    if (selectedCards.length === 0) {
-      alert('Pilih setidaknya 1 kartu NFC yang diizinkan untuk link ini!');
-      return;
-    }
 
-    setFormSubmitting(true);
+    setSaving(true);
+
     if (editingLink) {
+      // Update
       const res = await api.updateProtectedLink(editingLink.id, {
         title,
-        slug: slug || title.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+        description,
         target_redirect_url: targetUrl,
         allowed_card_ids: selectedCards,
         require_pin: requirePin,
@@ -98,9 +107,10 @@ export default function ProtectedLinksPage() {
         alert(res.error?.message || 'Gagal memperbarui link.');
       }
     } else {
+      // Create
       const res = await api.createProtectedLink({
         title,
-        slug: slug || title.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+        description,
         target_redirect_url: targetUrl,
         allowed_card_ids: selectedCards,
         require_pin: requirePin,
@@ -110,13 +120,13 @@ export default function ProtectedLinksPage() {
         setShowModal(false);
         loadData();
       } else {
-        alert(res.error?.message || 'Gagal membuat link baru.');
+        alert(res.error?.message || 'Gagal membuat link.');
       }
     }
-    setFormSubmitting(false);
+    setSaving(false);
   }
 
-  async function handleDelete(id: string, title: string) {
+  async function handleDeleteLink(id: string, title: string) {
     if (!confirm(`Hapus Protected Link "${title}"?`)) return;
     const res = await api.deleteProtectedLink(id);
     if (res.success) {
@@ -141,6 +151,127 @@ export default function ProtectedLinksPage() {
     setTimeout(() => setCopiedId(null), 2500);
   }
 
+  // 1-Tap Physical NFC Direct Scan inside Modal (Web NFC)
+  async function handleTapScanPhysicalCard() {
+    if (typeof window === 'undefined' || !('NDEFReader' in window)) {
+      alert('Fitur Web NFC langsung memerlukan Google Chrome pada HP Android ber-NFC. Untuk browser lain, Anda dapat menggunakan tombol FIDO2 atau Input Manual.');
+      return;
+    }
+
+    setScanningNFCInModal(true);
+    setModalFeedback('Membuka sensor NFC... Silakan tempelkan kartu fisik (e-Money / Flazz / e-KTP / Tag) ke belakang HP sekarang!');
+
+    try {
+      const NDEFReaderClass = (window as any).NDEFReader;
+      const ndef = new NDEFReaderClass();
+      await ndef.scan();
+
+      ndef.onreadingerror = () => {
+        alert('Gagal membaca kartu NFC. Pastikan kartu didekatkan dengan stabil.');
+        setScanningNFCInModal(false);
+      };
+
+      ndef.onreading = async (event: any) => {
+        const serial = event.serialNumber;
+        const rawUid = serial ? serial.replace(/:/g, '').toUpperCase() : 'TAG';
+        const credId = `NFC-UID-${rawUid}`;
+
+        setScanningNFCInModal(false);
+
+        const labelPrompt = prompt(`Kartu NFC Terdeteksi! (Serial: ${serial || rawUid})\nBeri nama kartu:`, `Kartu Fisik (${rawUid.substring(0, 6)})`);
+        const finalLabel = labelPrompt?.trim() || `Kartu Fisik (${rawUid.substring(0, 6)})`;
+
+        // Register new card
+        const res = await api.registerCredential({
+          user_id: 'usr_demo_john_doe',
+          credential_id: credId,
+          label: finalLabel,
+          transports: ['nfc'],
+        });
+
+        if (res.success) {
+          const updatedCreds = await api.listCredentials();
+          if (updatedCreds.data) {
+            setCredentials(updatedCreds.data);
+          }
+          // Automatically select/check this new card in the whitelist!
+          setSelectedCards((prev) => Array.from(new Set([...prev, credId])));
+          setModalFeedback(`Kartu "${finalLabel}" [${credId}] berhasil didaftarkan dan OTOMATIS dicentang dalam whitelist link ini!`);
+        } else {
+          alert(res.error?.message || 'Gagal menyimpan kartu ke database.');
+        }
+      };
+    } catch (err: any) {
+      console.warn('Web NFC registration error:', err);
+      setScanningNFCInModal(false);
+      if (err.name === 'NotAllowedError') {
+        alert('Izin akses NFC ditolak pada browser.');
+      } else {
+        alert(`Pemindaian NFC: ${err.message || 'NFC tidak aktif.'}`);
+      }
+    }
+  }
+
+  // FIDO2 Key Registration inside Modal
+  async function handleRegisterFIDO2Card() {
+    if (typeof window === 'undefined' || !window.PublicKeyCredential) {
+      alert('Browser Anda tidak mendukung WebAuthn API.');
+      return;
+    }
+
+    setRegisteringWebAuthnInModal(true);
+    setModalFeedback(null);
+
+    try {
+      const randomChallenge = new Uint8Array(32);
+      window.crypto.getRandomValues(randomChallenge);
+      const userId = new Uint8Array(16);
+      window.crypto.getRandomValues(userId);
+
+      const credential: any = await navigator.credentials.create({
+        publicKey: {
+          challenge: randomChallenge,
+          rp: { name: 'Catauth', id: window.location.hostname },
+          user: { id: userId, name: 'admin@catauth.io', displayName: 'Administrator' },
+          pubKeyCredParams: [{ alg: -7, type: 'public-key' }, { alg: -257, type: 'public-key' }],
+          authenticatorSelection: { authenticatorAttachment: 'cross-platform', userVerification: 'preferred' },
+          timeout: 60000,
+        },
+      });
+
+      if (credential) {
+        const rawIdArray = new Uint8Array(credential.rawId);
+        const hexId = Array.from(rawIdArray).map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+        const shortCredId = `FIDO2-NFC-${hexId.substring(0, 16)}`;
+
+        const labelPrompt = prompt('Kunci FIDO2 Terdeteksi! Beri nama label:', `YubiKey (${hexId.substring(0, 6)})`);
+        const finalLabel = labelPrompt?.trim() || `YubiKey (${hexId.substring(0, 6)})`;
+
+        const res = await api.registerCredential({
+          user_id: 'usr_admin_master',
+          credential_id: shortCredId,
+          label: finalLabel,
+          transports: ['nfc', 'usb'],
+        });
+
+        if (res.success) {
+          const updatedCreds = await api.listCredentials();
+          if (updatedCreds.data) {
+            setCredentials(updatedCreds.data);
+          }
+          setSelectedCards((prev) => Array.from(new Set([...prev, shortCredId])));
+          setModalFeedback(`Kunci FIDO2 "${finalLabel}" berhasil didaftarkan dan OTOMATIS dicentang!`);
+        }
+      }
+    } catch (err: any) {
+      if (err.name !== 'NotAllowedError') {
+        alert(`Pendaftaran FIDO2: ${err.message}`);
+      }
+    } finally {
+      setRegisteringWebAuthnInModal(false);
+    }
+  }
+
   async function handleCreateNewCard(e: React.FormEvent) {
     e.preventDefault();
     if (!newCardLabel.trim()) return;
@@ -162,6 +293,7 @@ export default function ProtectedLinksPage() {
       setShowAddCard(false);
       setNewCardLabel('');
       setNewCardId('');
+      setModalFeedback(`Kartu "${newCardLabel}" berhasil ditambahkan dan dicentang.`);
     }
   }
 
@@ -200,176 +332,157 @@ export default function ProtectedLinksPage() {
           ))}
         </div>
       ) : links.length === 0 ? (
-        <div className="bento-card p-12 text-center border-neutral-800 space-y-4">
-          <div className="w-12 h-12 rounded-full bg-neutral-900 border border-neutral-800 text-neutral-400 flex items-center justify-center mx-auto">
-            <Link2 className="w-6 h-6" />
-          </div>
+        <div className="bento-card p-12 text-center space-y-4 border-neutral-800">
+          <Link2 className="w-10 h-10 text-neutral-500 mx-auto" />
           <h3 className="text-base font-bold text-white">Belum Ada Protected Link</h3>
-          <p className="text-xs text-neutral-400 max-w-md mx-auto">
-            Mulai dengan membuat tautan pertama Anda untuk mengunci aplikasi atau dashboard dengan kartu fisik NFC.
+          <p className="text-xs text-neutral-400 max-w-sm mx-auto">
+            Buat tautan proteksi pertama Anda untuk mengamankan halaman web dengan otentikasi hardware NFC.
           </p>
           <button
             onClick={handleOpenCreate}
             className="px-4 py-2 rounded-md bg-white text-black font-medium text-xs hover:bg-neutral-200"
           >
-            Buat Link Pertama
+            + Buat Protected Link Sekarang
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {links.map((link) => {
-            const passRate = link.total_taps > 0 
-              ? Math.round((link.successful_passes / link.total_taps) * 100) 
-              : 100;
             const isCopied = copiedId === link.id;
-
             return (
               <div
                 key={link.id}
-                className="bento-card p-6 border-neutral-800 hover:border-neutral-700 transition-all flex flex-col justify-between space-y-5 relative group"
+                className={`bento-card p-6 space-y-5 border transition-all flex flex-col justify-between ${
+                  link.is_active ? 'border-neutral-800 hover:border-neutral-700' : 'border-neutral-900 opacity-60'
+                }`}
               >
-                {/* Card Header */}
-                <div className="space-y-3">
+                <div className="space-y-4">
+                  {/* Top Bar: Title, Status, and Controls */}
                   <div className="flex items-start justify-between">
                     <div className="space-y-1">
                       <div className="flex items-center space-x-2">
-                        <h3 className="text-base font-bold text-white group-hover:text-white transition-colors">
-                          {link.title}
-                        </h3>
+                        <h3 className="font-bold text-white text-base tracking-tight">{link.title}</h3>
                         <span
-                          className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+                          className={`text-[10px] font-mono px-2 py-0.5 rounded ${
                             link.is_active
-                              ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/40'
-                              : 'bg-neutral-900 text-neutral-500 border-neutral-800'
+                              ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40'
+                              : 'bg-neutral-900 text-neutral-500 border border-neutral-800'
                           }`}
                         >
                           {link.is_active ? 'ACTIVE' : 'PAUSED'}
                         </span>
                       </div>
-                      <span className="text-xs font-mono text-neutral-500 block">
-                        ID: {link.id} • Slug: /{link.slug}
-                      </span>
+                      <p className="text-xs text-neutral-400 leading-relaxed">{link.description}</p>
                     </div>
 
-                    {/* Quick Action Toggles */}
                     <div className="flex items-center space-x-1.5">
                       <button
-                        onClick={() => handleToggleStatus(link)}
-                        title={link.is_active ? 'Pause Link' : 'Activate Link'}
-                        className="p-1.5 rounded hover:bg-neutral-900 text-neutral-400 hover:text-white"
-                      >
-                        {link.is_active ? (
-                          <ToggleRight className="w-5 h-5 text-emerald-400" />
-                        ) : (
-                          <ToggleLeft className="w-5 h-5 text-neutral-600" />
-                        )}
-                      </button>
-                      <button
                         onClick={() => handleOpenEdit(link)}
-                        title="Edit Link & Whitelist"
                         className="p-1.5 rounded hover:bg-neutral-900 text-neutral-400 hover:text-white"
+                        title="Edit Konfigurasi"
                       >
                         <Edit3 className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => handleDelete(link.id, link.title)}
+                        onClick={() => handleDeleteLink(link.id, link.title)}
+                        className="p-1.5 rounded hover:bg-red-950/50 text-neutral-500 hover:text-red-400"
                         title="Hapus Link"
-                        className="p-1.5 rounded hover:bg-neutral-900 text-neutral-400 hover:text-red-400"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
 
-                  {/* Target Redirect URL Box */}
+                  {/* Target Redirect Preview */}
                   <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800/80 space-y-1.5">
-                    <span className="text-[10px] font-mono uppercase tracking-wider text-neutral-500 block">
-                      Target Destination (Setelah Tap Lolos):
-                    </span>
-                    <div className="flex items-center space-x-1.5 text-xs font-mono text-cyan-300 break-all">
-                      <ExternalLink className="w-3.5 h-3.5 flex-shrink-0 text-neutral-500" />
-                      <span>{link.target_redirect_url}</span>
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-neutral-500 font-mono">Target Destination URL:</span>
+                      <a
+                        href={link.target_redirect_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-cyan-400 hover:underline flex items-center space-x-1 text-[11px] font-mono"
+                      >
+                        <span>Kunjungi</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
                     </div>
+                    <p className="text-xs font-mono text-cyan-300 truncate font-semibold">
+                      {link.target_redirect_url}
+                    </p>
                   </div>
 
-                  {/* Whitelisted Cards List */}
-                  <div className="space-y-1.5 pt-1">
-                    <span className="text-[10px] font-mono uppercase tracking-wider text-neutral-500 block">
-                      Kartu NFC Terotorisasi ({link.allowed_card_ids.length} Kartu Dikenali):
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {link.allowed_card_ids.map((cardId) => {
-                        const matchedCred = credentials.find((c) => c.credential_id === cardId);
+                  {/* Allowed NFC Cards Whitelist Summary */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-neutral-400 font-mono flex items-center space-x-1">
+                        <Key className="w-3.5 h-3.5 text-neutral-400" />
+                        <span>Whitelist Kartu NFC ({link.allowed_card_ids?.length || 0})</span>
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                      {link.allowed_card_ids?.map((cardId) => {
+                        const credObj = credentials.find((c) => c.credential_id === cardId);
                         return (
                           <span
                             key={cardId}
-                            className="inline-flex items-center space-x-1 text-[10px] font-mono px-2 py-0.5 rounded bg-neutral-900 text-neutral-300 border border-neutral-800"
+                            className="inline-flex items-center space-x-1 text-[10px] font-mono px-2 py-1 rounded bg-neutral-900 text-neutral-300 border border-neutral-800"
                           >
-                            <Key className="w-2.5 h-2.5 text-neutral-400" />
-                            <span>{matchedCred?.label || cardId}</span>
+                            <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                            <span>{credObj ? credObj.label : cardId}</span>
                           </span>
                         );
                       })}
+                      {(!link.allowed_card_ids || link.allowed_card_ids.length === 0) && (
+                        <span className="text-[11px] text-red-400 font-mono">
+                          ⚠️ Belum ada kartu yang diizinkan (Akses akan ditolak)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Live Metrics */}
+                  <div className="grid grid-cols-3 gap-2 text-center pt-2">
+                    <div className="p-2 rounded bg-neutral-950 border border-neutral-800/80">
+                      <div className="text-[10px] font-mono text-neutral-500">Total Taps</div>
+                      <div className="text-sm font-mono font-bold text-white">{link.total_taps}</div>
+                    </div>
+                    <div className="p-2 rounded bg-neutral-950 border border-neutral-800/80">
+                      <div className="text-[10px] font-mono text-neutral-500">Lolos (Pass)</div>
+                      <div className="text-sm font-mono font-bold text-emerald-400">{link.successful_passes}</div>
+                    </div>
+                    <div className="p-2 rounded bg-neutral-950 border border-neutral-800/80">
+                      <div className="text-[10px] font-mono text-neutral-500">Diblokir</div>
+                      <div className="text-sm font-mono font-bold text-red-400">{link.blocked_attempts}</div>
                     </div>
                   </div>
                 </div>
 
-                {/* Metrics & Bottom Actions */}
-                <div className="pt-4 border-t border-neutral-800/80 space-y-4">
-                  {/* Stats Bar */}
-                  <div className="grid grid-cols-3 gap-2 text-center">
-                    <div className="p-2 rounded bg-neutral-950 border border-neutral-900">
-                      <span className="text-[10px] font-mono text-neutral-500 block">Total Taps</span>
-                      <span className="text-sm font-bold text-white font-mono">{link.total_taps}</span>
-                    </div>
-                    <div className="p-2 rounded bg-neutral-950 border border-neutral-900">
-                      <span className="text-[10px] font-mono text-neutral-500 block">Pass Rate</span>
-                      <span className="text-sm font-bold text-emerald-400 font-mono">{passRate}%</span>
-                    </div>
-                    <div className="p-2 rounded bg-neutral-950 border border-neutral-900">
-                      <span className="text-[10px] font-mono text-neutral-500 block">Blocked</span>
-                      <span className="text-sm font-bold text-red-400 font-mono">{link.blocked_attempts}</span>
-                    </div>
-                  </div>
+                {/* Bottom Bar: 1-Click Copy Gateway URL & Status Toggle */}
+                <div className="pt-4 border-t border-neutral-800 flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => handleCopyGatewayUrl(link.id)}
+                    className={`px-3 py-1.5 rounded text-xs font-medium transition-colors flex items-center space-x-1.5 ${
+                      isCopied
+                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                        : 'bg-white hover:bg-neutral-200 text-black'
+                    }`}
+                  >
+                    {isCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{isCopied ? 'Tersalin!' : 'Salin Link Gateway SSO'}</span>
+                  </button>
 
-                  {/* Actions Row */}
-                  <div className="flex items-center justify-between gap-2 pt-1">
-                    <button
-                      onClick={() => handleCopyGatewayUrl(link.id)}
-                      className="px-3 py-1.5 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border border-neutral-800 text-xs font-medium inline-flex items-center space-x-1.5 transition-colors"
-                    >
-                      {isCopied ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          <span className="text-emerald-400">Tersalin!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5 text-neutral-400" />
-                          <span>Salin Link Gateway</span>
-                        </>
-                      )}
-                    </button>
-
-                    <div className="flex items-center space-x-2">
-                      <Link
-                        href={`/admin/dashboard?link_id=${link.id}`}
-                        className="px-3 py-1.5 rounded hover:bg-neutral-900 text-neutral-400 hover:text-white text-xs font-medium inline-flex items-center space-x-1 transition-colors"
-                      >
-                        <Activity className="w-3.5 h-3.5" />
-                        <span>Pantau Telemetry</span>
-                      </Link>
-
-                      <Link
-                        href={`/sso/login?link_id=${link.id}`}
-                        target="_blank"
-                        className="px-3 py-1.5 rounded bg-white text-black font-medium text-xs hover:bg-neutral-200 inline-flex items-center space-x-1 transition-colors"
-                      >
-                        <span>Uji Tap Gateway</span>
-                        <ArrowRight className="w-3 h-3" />
-                      </Link>
-                    </div>
-                  </div>
+                  <button
+                    onClick={() => handleToggleStatus(link)}
+                    className={`px-2.5 py-1.5 rounded text-xs font-mono transition-colors border ${
+                      link.is_active
+                        ? 'bg-neutral-900 hover:bg-neutral-800 text-neutral-400 border-neutral-800'
+                        : 'bg-emerald-950/40 hover:bg-emerald-900 text-emerald-400 border-emerald-800/40'
+                    }`}
+                  >
+                    {link.is_active ? 'Jeda Link' : 'Aktifkan'}
+                  </button>
                 </div>
               </div>
             );
@@ -377,26 +490,39 @@ export default function ProtectedLinksPage() {
         </div>
       )}
 
-      {/* Create / Edit Protected Link Modal */}
+      {/* Create / Edit Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bento-card max-w-xl w-full p-6 border-neutral-700 bg-black space-y-6 my-8 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-neutral-800 pb-4">
-              <div className="flex items-center space-x-2">
-                <Link2 className="w-5 h-5 text-white" />
-                <h3 className="text-lg font-bold text-white">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bento-card max-w-xl w-full p-6 border-neutral-700 bg-black space-y-5 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-white">
                   {editingLink ? 'Edit Protected Link' : 'Buat Protected Link Baru'}
                 </h3>
+                <p className="text-xs text-neutral-400">
+                  Tentukan URL tujuan dan kartu NFC yang berhak membuka link ini.
+                </p>
               </div>
               <button
                 onClick={() => setShowModal(false)}
-                className="text-neutral-400 hover:text-white text-sm"
+                className="text-neutral-500 hover:text-white text-lg leading-none"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Modal Feedback Alert */}
+            {modalFeedback && (
+              <div className="p-3 rounded-lg bg-emerald-950/50 border border-emerald-800/50 text-emerald-300 text-xs font-mono flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{modalFeedback}</span>
+                </div>
+                <button onClick={() => setModalFeedback(null)} className="text-emerald-400 hover:text-white ml-2">✕</button>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitLink} className="space-y-4">
               {/* Link Title */}
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-neutral-300">
@@ -430,22 +556,86 @@ export default function ProtectedLinksPage() {
                 </p>
               </div>
 
-              {/* NFC Whitelist Selector */}
-              <div className="space-y-2 pt-2 border-t border-neutral-800">
-                <div className="flex items-center justify-between">
+              {/* NFC Whitelist Selector + Direct Tap Adding */}
+              <div className="space-y-2.5 pt-2 border-t border-neutral-800">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                   <label className="text-xs font-medium text-white flex items-center space-x-1.5">
                     <Key className="w-3.5 h-3.5 text-neutral-400" />
                     <span>Pilih Kartu NFC yang Dikenali (Whitelist)</span>
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddCard(true)}
-                    className="text-[11px] text-neutral-400 hover:text-white underline font-mono"
-                  >
-                    + Daftarkan Kartu Baru
-                  </button>
+
+                  {/* 1-Tap NFC Add Buttons */}
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={handleTapScanPhysicalCard}
+                      disabled={scanningNFCInModal}
+                      className="px-2.5 py-1 rounded bg-neutral-900 hover:bg-neutral-800 text-cyan-300 border border-cyan-800/60 font-mono text-[11px] flex items-center space-x-1"
+                    >
+                      {scanningNFCInModal ? (
+                        <>
+                          <RefreshCw className="w-3 h-3 animate-spin text-cyan-400" />
+                          <span>Membaca Kartu HP...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CreditCard className="w-3 h-3" />
+                          <span>📲 Tap Kartu Fisik HP</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleRegisterFIDO2Card}
+                      disabled={registeringWebAuthnInModal}
+                      className="px-2 py-1 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-800 font-mono text-[11px] flex items-center space-x-1"
+                    >
+                      <Cpu className="w-3 h-3" />
+                      <span>FIDO2</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowAddCard(!showAddCard)}
+                      className="text-[11px] text-neutral-400 hover:text-white underline font-mono"
+                    >
+                      {showAddCard ? 'Batal' : '+ Input Manual'}
+                    </button>
+                  </div>
                 </div>
 
+                {/* Sub-form: Add Custom Card Inline */}
+                {showAddCard && (
+                  <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 space-y-2 animate-in fade-in duration-100">
+                    <span className="text-[11px] font-bold text-white block">Daftarkan Kartu Manual Baru:</span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        placeholder="Label (e.g. Kartu e-Money Ferdi)"
+                        value={newCardLabel}
+                        onChange={(e) => setNewCardLabel(e.target.value)}
+                        className="px-2.5 py-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs text-white"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Card ID (Auto-generate jika kosong)"
+                        value={newCardId}
+                        onChange={(e) => setNewCardId(e.target.value)}
+                        className="px-2.5 py-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs text-cyan-300 font-mono"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCreateNewCard}
+                      className="px-3 py-1 rounded bg-white text-black font-medium text-xs hover:bg-neutral-200"
+                    >
+                      Simpan & Tambahkan ke Whitelist
+                    </button>
+                  </div>
+                )}
+
+                {/* List of Known Cards Checkboxes */}
                 <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 space-y-2 max-h-48 overflow-y-auto">
                   {credentials.map((cred) => {
                     const isChecked = selectedCards.includes(cred.credential_id);
@@ -519,70 +709,21 @@ export default function ProtectedLinksPage() {
                 </label>
               </div>
 
-              {/* Form Buttons */}
-              <div className="flex items-center justify-end space-x-3 pt-4 border-t border-neutral-800">
+              {/* Action Buttons */}
+              <div className="flex justify-end space-x-2 pt-4 border-t border-neutral-800">
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="px-4 py-2 rounded-md hover:bg-neutral-900 text-neutral-400 hover:text-white text-xs font-medium"
+                  className="px-4 py-2 rounded-md hover:bg-neutral-900 text-neutral-400 text-xs"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  disabled={formSubmitting}
-                  className="px-5 py-2 rounded-md bg-white text-black font-medium text-xs hover:bg-neutral-200 transition-colors disabled:opacity-50"
+                  disabled={saving || selectedCards.length === 0}
+                  className="px-5 py-2 rounded-md bg-white hover:bg-neutral-200 disabled:opacity-50 text-black text-xs font-semibold"
                 >
-                  {formSubmitting ? 'Menyimpan...' : (editingLink ? 'Perbarui Link' : 'Buat & Terbitkan Link')}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Add New Card Mini Modal */}
-      {showAddCard && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bento-card max-w-md w-full p-6 border-neutral-700 bg-black space-y-4 animate-in fade-in zoom-in-95 duration-150">
-            <h3 className="text-base font-bold text-white">Daftarkan Kartu Hardware NFC Baru</h3>
-            <form onSubmit={handleCreateNewCard} className="space-y-3">
-              <div className="space-y-1">
-                <label className="text-xs text-neutral-300">Nama / Label Kartu</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Master YubiKey CFO, Kartu Akses Tim Alpha"
-                  value={newCardLabel}
-                  onChange={(e) => setNewCardLabel(e.target.value)}
-                  className="w-full px-3 py-2 rounded bg-neutral-900 border border-neutral-800 text-sm text-white focus:outline-none"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs text-neutral-300">Credential ID / Token Serial (Opsional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. FIDO2-NFC-KEY-DELTA-04 (Auto-generate jika kosong)"
-                  value={newCardId}
-                  onChange={(e) => setNewCardId(e.target.value)}
-                  className="w-full px-3 py-2 rounded bg-neutral-900 border border-neutral-800 text-sm font-mono text-cyan-300 focus:outline-none"
-                />
-              </div>
-
-              <div className="flex justify-end space-x-2 pt-3">
-                <button
-                  type="button"
-                  onClick={() => setShowAddCard(false)}
-                  className="px-3 py-1.5 rounded hover:bg-neutral-900 text-neutral-400 text-xs"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 rounded bg-white text-black font-medium text-xs hover:bg-neutral-200"
-                >
-                  Simpan & Tambahkan
+                  {saving ? 'Menyimpan...' : editingLink ? 'Simpan Perubahan' : 'Buat Protected Link'}
                 </button>
               </div>
             </form>
