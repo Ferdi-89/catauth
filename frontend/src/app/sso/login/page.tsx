@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { 
   Smartphone, AlertTriangle, XCircle, 
   Lock, CheckCircle2, ArrowRight, RefreshCw, Globe, KeyRound, Radio, ShieldAlert,
-  ExternalLink, Link2, Key, Cpu, Sparkles, Sliders
+  ExternalLink, Link2, Key, Cpu, Sparkles, Sliders, Info, CreditCard
 } from 'lucide-react';
 import { api } from '../../../lib/api';
 
@@ -28,13 +28,15 @@ function SSOLoginContent() {
   const [clientData, setClientData] = useState<any>(null);
   const [clientError, setClientError] = useState<string | null>(null);
   const [browserCompatible, setBrowserCompatible] = useState(true);
+  const [hasWebNFC, setHasWebNFC] = useState(false);
   const [challenge, setChallenge] = useState<string | null>(null);
 
   // Authentication status
   const [flowState, setFlowState] = useState<
-    'IDLE' | 'TAPPING' | 'NEED_PIN' | 'SUCCESS' | 'ERROR_BLOCKED' | 'ERROR_INVALID' | 'ERROR_UNAUTHORIZED_CARD' | 'ERROR_GEOFENCE' | 'ERROR_INCOMPATIBLE'
+    'IDLE' | 'TAPPING' | 'SCANNING_NFC' | 'NEED_PIN' | 'SUCCESS' | 'ERROR_BLOCKED' | 'ERROR_INVALID' | 'ERROR_UNAUTHORIZED_CARD' | 'ERROR_GEOFENCE' | 'ERROR_INCOMPATIBLE'
   >('IDLE');
   const [errorMessage, setErrorMessage] = useState('');
+  const [detectedCardId, setDetectedCardId] = useState('');
   const [tempAuthSession, setTempAuthSession] = useState<string | null>(null);
   const [pin, setPin] = useState('');
   const [pinLoading, setPinLoading] = useState(false);
@@ -50,6 +52,11 @@ function SSOLoginContent() {
     async function initGateway() {
       setLoading(true);
 
+      // Check Web NFC support on Android
+      if (typeof window !== 'undefined' && 'NDEFReader' in window) {
+        setHasWebNFC(true);
+      }
+
       // Validate Client or Protected Link
       const clientRes = await api.validateClient(linkId || clientId, redirectUri, state, nonce, linkId || undefined);
       if (!clientRes.success) {
@@ -60,7 +67,7 @@ function SSOLoginContent() {
       setClientData(clientRes.data);
 
       // Check Browser WebAuthn support
-      if (typeof window !== 'undefined' && !window.PublicKeyCredential) {
+      if (typeof window !== 'undefined' && !window.PublicKeyCredential && !('NDEFReader' in window)) {
         setBrowserCompatible(false);
         setFlowState('ERROR_INCOMPATIBLE');
         setLoading(false);
@@ -94,14 +101,67 @@ function SSOLoginContent() {
     return () => clearTimeout(timer);
   }, [flowState, redirectTarget, countdown]);
 
-  // Real Native Hardware WebAuthn Tap (Browser navigator.credentials.get)
-  async function handleRealHardwareTap() {
+  // Real Hardware Web NFC Tap (Android Chrome NDEFReader)
+  async function handleWebNFCTap() {
+    if (!challenge) return;
+    setFlowState('SCANNING_NFC');
+    setErrorMessage('');
+
+    if (typeof window === 'undefined' || !('NDEFReader' in window)) {
+      alert('Web NFC API tidak didukung pada browser ini. Gunakan Google Chrome di Android, atau gunakan mode WebAuthn FIDO2 / Simulator.');
+      setFlowState('IDLE');
+      return;
+    }
+
+    try {
+      const NDEFReaderClass = (window as any).NDEFReader;
+      const ndef = new NDEFReaderClass();
+      await ndef.scan();
+
+      ndef.onreadingerror = () => {
+        setErrorMessage('Gagal membaca kartu NFC. Pastikan kartu didekatkan dengan stabil pada antena NFC HP.');
+      };
+
+      ndef.onreading = async (event: any) => {
+        const serial = event.serialNumber; // e.g. "04:a2:3b:4c:5d:6e:7f"
+        const rawUid = serial ? serial.replace(/:/g, '').toUpperCase() : 'UNKNOWN';
+        const detectedCredId = `NFC-UID-${rawUid}`;
+
+        setFlowState('TAPPING');
+
+        const res = await api.submitAssertion({
+          client_id: clientId,
+          link_id: linkId || clientData?.link_id,
+          redirect_uri: clientData?.target_redirect_url || redirectUri,
+          challenge: challenge,
+          credential_id: detectedCredId,
+          client_data_json: btoa(JSON.stringify({ type: 'webnfc.scan', serial: serial })),
+          authenticator_data: btoa(`nfc_serial_${rawUid}`),
+          signature: btoa('valid_hardware_nfc_tap'),
+          state: state || undefined,
+          nonce: nonce || undefined,
+        });
+
+        processAssertionResult(res, detectedCredId);
+      };
+    } catch (err: any) {
+      console.warn('Web NFC Scan error:', err);
+      setFlowState('IDLE');
+      if (err.name === 'NotAllowedError') {
+        alert('Izin akses NFC ditolak. Izinkan browser Chrome untuk membaca NFC pada menu Pengaturan HP.');
+      } else {
+        alert(`Pemindaian Web NFC: ${err.message || 'NFC tidak aktif pada perangkat.'}`);
+      }
+    }
+  }
+
+  // Real Native Hardware WebAuthn Tap (FIDO2 YubiKey / Passkey)
+  async function handleRealFIDO2Tap() {
     if (!challenge) return;
     setFlowState('TAPPING');
     setErrorMessage('');
 
     try {
-      // Decode challenge string to Uint8Array buffer
       const challengeBuffer = new Uint8Array(32);
       for (let i = 0; i < 32; i++) {
         challengeBuffer[i] = challenge.charCodeAt(i % challenge.length);
@@ -114,7 +174,6 @@ function SSOLoginContent() {
         timeout: 60000,
       };
 
-      // Call Browser Native WebAuthn API
       const assertion: any = await navigator.credentials.get({
         publicKey: publicKeyCredentialRequestOptions,
       });
@@ -124,7 +183,6 @@ function SSOLoginContent() {
         const hexId = Array.from(rawIdArray).map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
         const detectedCredId = `FIDO2-NFC-${hexId.substring(0, 16)}`;
 
-        // Base64 encode auth data and signature
         const authDataB64 = btoa(String.fromCharCode(...new Uint8Array(assertion.response.authenticatorData)));
         const clientDataB64 = btoa(String.fromCharCode(...new Uint8Array(assertion.response.clientDataJSON)));
         const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(assertion.response.signature)));
@@ -142,15 +200,14 @@ function SSOLoginContent() {
           nonce: nonce || undefined,
         });
 
-        processAssertionResult(res);
+        processAssertionResult(res, detectedCredId);
       }
     } catch (err: any) {
       console.warn('Real WebAuthn tap error / cancelled:', err);
+      setFlowState('IDLE');
       if (err.name === 'NotAllowedError') {
-        setFlowState('IDLE');
-        alert('Pemindaian WebAuthn dibatalkan atau waktu tunggu habis. Anda juga dapat menggunakan Tab Simulator untuk pengujian.');
+        alert('Pemindaian WebAuthn dibatalkan. Jika menggunakan kartu biasa (e-Money/Flazz), gunakan tombol "📲 Pindai NFC Langsung"!');
       } else {
-        // Fallback to simulated submission if local test key was used
         handleSimulatedTap();
       }
     }
@@ -162,7 +219,6 @@ function SSOLoginContent() {
     setFlowState('TAPPING');
     setErrorMessage('');
 
-    // Simulate 500ms NFC hardware scan delay
     await new Promise((r) => setTimeout(r, 500));
 
     let credId = 'FIDO2-NFC-KEY-ALPHA-01';
@@ -201,10 +257,10 @@ function SSOLoginContent() {
       nonce: nonce || undefined,
     });
 
-    processAssertionResult(res);
+    processAssertionResult(res, credId);
   }
 
-  function processAssertionResult(res: any) {
+  function processAssertionResult(res: any, credId?: string) {
     if (!res.success || !res.data) {
       setFlowState('ERROR_INVALID');
       setErrorMessage(res.error?.message || 'Authentication failed.');
@@ -218,7 +274,8 @@ function SSOLoginContent() {
       setErrorMessage(data.error_message || 'Hardware token is revoked or blocked.');
     } else if (data.status === 'UNAUTHORIZED_CARD') {
       setFlowState('ERROR_UNAUTHORIZED_CARD');
-      setErrorMessage(data.error_message || 'Kartu NFC ini tidak terdaftar dalam whitelist link ini.');
+      setDetectedCardId(data.detected_card_id || credId || '');
+      setErrorMessage(data.error_message || 'Kartu NFC ini belum terdaftar dalam whitelist link ini.');
     } else if (data.status === 'GEOFENCE_REJECTED') {
       setFlowState('ERROR_GEOFENCE');
       setErrorMessage(data.error_message || 'Access rejected due to geofencing restriction.');
@@ -285,7 +342,7 @@ function SSOLoginContent() {
     );
   }
 
-  // Render Unauthorized Card Screen
+  // Render Unauthorized Card Screen (Shows detected card ID + link to whitelist)
   if (flowState === 'ERROR_UNAUTHORIZED_CARD') {
     return (
       <div className="max-w-md mx-auto my-12 bento-card p-8 text-center space-y-6 border-red-800/50">
@@ -293,22 +350,29 @@ function SSOLoginContent() {
           <ShieldAlert className="w-8 h-8" />
         </div>
         <div className="space-y-2">
-          <h2 className="text-xl font-bold text-white">Kartu Tidak Dikenali / Tidak Diizinkan</h2>
+          <h2 className="text-xl font-bold text-white">Kartu Tidak Diizinkan pada Link Ini</h2>
           <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-red-950/40 text-red-400 border border-red-800/40">
             Node 20: Link Whitelist Violation
           </span>
           <p className="text-xs text-neutral-300 leading-relaxed pt-2">{errorMessage}</p>
         </div>
-        <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 text-left text-xs font-mono text-neutral-400 space-y-1">
-          <div>Protected Link: <span className="text-white">{clientData?.app_name}</span></div>
-          <div>Status: <span className="text-red-400">UNAUTHORIZED_CARD</span></div>
+
+        <div className="p-3.5 rounded-lg bg-neutral-950 border border-neutral-800 text-left text-xs font-mono space-y-1.5">
+          <div className="text-neutral-500">ID Kartu Terdeteksi:</div>
+          <div className="text-amber-300 font-bold break-all">{detectedCardId || 'NFC Hardware Tag'}</div>
+          <div className="text-[10px] text-neutral-500 pt-1">
+            Untuk mengizinkan kartu ini, masukkan ID di atas ke whitelist link ini pada menu Admin Links.
+          </div>
         </div>
-        <button
-          onClick={() => { setFlowState('IDLE'); setSelectedKey('ALPHA'); }}
-          className="w-full py-2.5 rounded-md bg-white hover:bg-neutral-200 text-black text-xs font-semibold"
-        >
-          Coba Gunakan Kartu Terdaftar (Alpha Key)
-        </button>
+
+        <div className="flex flex-col gap-2">
+          <button
+            onClick={() => { setFlowState('IDLE'); setSelectedKey('ALPHA'); }}
+            className="w-full py-2.5 rounded-md bg-white hover:bg-neutral-200 text-black text-xs font-semibold"
+          >
+            Coba Pindai Kartu Lain
+          </button>
+        </div>
       </div>
     );
   }
@@ -332,30 +396,6 @@ function SSOLoginContent() {
           className="px-4 py-2 rounded-md bg-white hover:bg-neutral-200 text-black text-xs font-semibold"
         >
           Gunakan Kartu Lain
-        </button>
-      </div>
-    );
-  }
-
-  // Render Cloned Screen
-  if (flowState === 'ERROR_INVALID') {
-    return (
-      <div className="max-w-md mx-auto my-12 bento-card p-8 text-center space-y-6 border-red-800/40">
-        <div className="w-16 h-16 rounded-2xl bg-red-950/40 border border-red-800/40 text-red-400 flex items-center justify-center mx-auto">
-          <XCircle className="w-8 h-8" />
-        </div>
-        <div className="space-y-2">
-          <h2 className="text-xl font-bold text-white">Anomali Kloning / Gagal Kriptografis</h2>
-          <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-red-950/40 text-red-400 border border-red-800/40">
-            Node 22: Cloned Anomaly Blocked
-          </span>
-          <p className="text-xs text-neutral-400 leading-relaxed pt-2">{errorMessage}</p>
-        </div>
-        <button
-          onClick={() => { setFlowState('IDLE'); setSelectedKey('ALPHA'); }}
-          className="px-4 py-2 rounded-md bg-white hover:bg-neutral-200 text-black text-xs font-semibold"
-        >
-          Coba Lagi dengan Nonce Baru
         </button>
       </div>
     );
@@ -464,7 +504,7 @@ function SSOLoginContent() {
 
           <div className="text-right text-[11px] font-mono text-neutral-400">
             <div>RP: {clientData?.rp_id || 'catauth.io'}</div>
-            <div className="text-emerald-400">FIDO2 Ready</div>
+            <div className="text-emerald-400">FIDO2 & Web NFC</div>
           </div>
         </div>
 
@@ -500,50 +540,80 @@ function SSOLoginContent() {
           </div>
 
           <h3 className="text-2xl font-extrabold text-white">
-            {authMode === 'REAL_HARDWARE' ? 'Tempelkan Kartu Hardware NFC Asli' : 'Pilih & Uji Coba Kartu NFC'}
+            {authMode === 'REAL_HARDWARE' ? 'Tempelkan Kartu NFC Anda' : 'Pilih & Uji Coba Kartu NFC'}
           </h3>
           <p className="text-xs text-neutral-400 max-w-sm mx-auto">
             {authMode === 'REAL_HARDWARE' 
-              ? 'Dekatkan kartu fisik NFC / YubiKey Anda ke sensor pembaca pada perangkat.'
+              ? 'Pilih metode pembacaan kartu NFC di bawah ini sesuai jenis kartu yang Anda gunakan.'
               : 'Gunakan simulator untuk menguji berbagai skenario otentikasi, kartu diizinkan, dan deteksi anomali.'}
           </p>
         </div>
 
         {/* Concentric Radar Wave Animation */}
         <div className="relative w-48 h-48 mx-auto flex items-center justify-center">
-          <div className="absolute inset-0 rounded-full border border-neutral-700 animate-radar-ping"></div>
+          <div className={`absolute inset-0 rounded-full border border-neutral-700 ${flowState === 'SCANNING_NFC' ? 'animate-ping' : 'animate-radar-ping'}`}></div>
           <div className="absolute inset-6 rounded-full border border-neutral-800 animate-radar-ping" style={{ animationDelay: '0.8s' }}></div>
           <div className="absolute inset-12 rounded-full border border-neutral-800 animate-radar-ping" style={{ animationDelay: '1.6s' }}></div>
           
-          <div className="relative z-10 w-24 h-24 rounded-2xl bg-neutral-950 border border-neutral-800 flex flex-col items-center justify-center shadow-2xl">
-            <Radio className="w-7 h-7 text-white animate-pulse" />
-            <span className="text-[10px] font-mono font-semibold text-neutral-300 mt-1">NFC SCAN</span>
+          <div className={`relative z-10 w-24 h-24 rounded-2xl border flex flex-col items-center justify-center shadow-2xl transition-all ${
+            flowState === 'SCANNING_NFC' ? 'bg-emerald-950 border-emerald-500 scale-105' : 'bg-neutral-950 border-neutral-800'
+          }`}>
+            <Radio className={`w-7 h-7 ${flowState === 'SCANNING_NFC' ? 'text-emerald-400 animate-bounce' : 'text-white animate-pulse'}`} />
+            <span className="text-[10px] font-mono font-semibold text-neutral-300 mt-1">
+              {flowState === 'SCANNING_NFC' ? 'READY NFC' : 'NFC SCAN'}
+            </span>
           </div>
         </div>
 
-        {/* Mode 1: Real Hardware Tap Prompt */}
+        {/* Mode 1: Real Hardware Tap Options */}
         {authMode === 'REAL_HARDWARE' && (
-          <div className="space-y-3">
+          <div className="space-y-3 pt-2">
+            {/* Primary Option: Web NFC for Android (e-Money, Flazz, e-KTP, Tag) */}
             <button
-              onClick={handleRealHardwareTap}
+              onClick={handleWebNFCTap}
               disabled={flowState === 'TAPPING'}
               className="w-full py-3.5 rounded-md bg-white hover:bg-neutral-200 text-black text-xs font-semibold transition-colors flex items-center justify-center space-x-2 shadow-lg"
             >
-              {flowState === 'TAPPING' ? (
+              {flowState === 'SCANNING_NFC' ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-emerald-600" />
+                  <span className="text-emerald-800 font-bold">Tempelkan Kartu NFC ke Belakang HP Sekarang...</span>
+                </>
+              ) : flowState === 'TAPPING' ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Menunggu Tap Kartu Hardware / Sensor...</span>
+                  <span>Memverifikasi Assertion...</span>
                 </>
               ) : (
                 <>
-                  <Cpu className="w-4 h-4" />
-                  <span>Mulai Pemindaian WebAuthn / NFC Asli</span>
+                  <CreditCard className="w-4 h-4" />
+                  <span>📲 Pindai NFC Langsung (e-Money / Flazz / e-KTP / Tag)</span>
                 </>
               )}
             </button>
-            <p className="text-[11px] text-neutral-500 font-mono">
-              Memicu dialog native WebAuthn (YubiKey, Passkey NFC, Touch ID, Windows Hello).
-            </p>
+
+            {/* Secondary Option: WebAuthn for FIDO2 Security Keys (YubiKey) */}
+            <button
+              onClick={handleRealFIDO2Tap}
+              disabled={flowState === 'TAPPING'}
+              className="w-full py-2.5 rounded-md bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-800 text-xs font-medium transition-colors flex items-center justify-center space-x-2"
+            >
+              <Cpu className="w-3.5 h-3.5 text-neutral-400" />
+              <span>Gunakan Kunci FIDO2 / YubiKey (WebAuthn Dialog)</span>
+            </button>
+
+            {/* Explanatory Tip Banner */}
+            <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-900 text-left text-[11px] text-neutral-400 space-y-1">
+              <div className="flex items-center space-x-1.5 text-neutral-300 font-semibold">
+                <Info className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Tips Penggunaan NFC pada Android:</span>
+              </div>
+              <p className="leading-relaxed">
+                • Gunakan tombol <strong>"Pindai NFC Langsung"</strong> untuk kartu fisik umum (e-Money, Flazz, Brizzi, e-KTP, smart badge).
+                <br />
+                • Gunakan tombol <strong>"Kunci FIDO2 / YubiKey"</strong> jika Anda menggunakan hardware token khusus FIDO2/Passkey.
+              </p>
+            </div>
           </div>
         )}
 

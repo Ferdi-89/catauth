@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   KeyRound, Shield, Ban, CheckCircle2, RefreshCw, Smartphone, Plus, 
-  Trash2, ShieldCheck, ShieldAlert, Cpu, Sparkles, Check 
+  Trash2, ShieldCheck, ShieldAlert, Cpu, Sparkles, Check, CreditCard, Info 
 } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { FIDO2Credential } from '../../../lib/types';
@@ -12,6 +12,7 @@ export default function AdminKeysPage() {
   const [credentials, setCredentials] = useState<FIDO2Credential[]>([]);
   const [loading, setLoading] = useState(true);
   const [registeringWebAuthn, setRegisteringWebAuthn] = useState(false);
+  const [scanningNFC, setScanningNFC] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualLabel, setManualLabel] = useState('');
   const [manualId, setManualId] = useState('');
@@ -30,7 +31,62 @@ export default function AdminKeysPage() {
     loadCredentials();
   }, []);
 
-  // Real Native WebAuthn Registration (FIDO2 Hardware Key / NFC / Passkey)
+  // Web NFC Direct Scan Registration (for e-Money, Flazz, e-KTP, Mifare, NFC Tags)
+  async function handleRegisterWebNFC() {
+    if (typeof window === 'undefined' || !('NDEFReader' in window)) {
+      alert('Fitur Web NFC langsung memerlukan Google Chrome pada HP Android ber-NFC.');
+      return;
+    }
+
+    setScanningNFC(true);
+    setFeedback('Membuka sensor NFC... Silakan tempelkan kartu ke belakang HP!');
+
+    try {
+      const NDEFReaderClass = (window as any).NDEFReader;
+      const ndef = new NDEFReaderClass();
+      await ndef.scan();
+
+      ndef.onreadingerror = () => {
+        alert('Gagal membaca kartu NFC. Pastikan kartu didekatkan dengan stabil.');
+        setScanningNFC(false);
+      };
+
+      ndef.onreading = async (event: any) => {
+        const serial = event.serialNumber;
+        const rawUid = serial ? serial.replace(/:/g, '').toUpperCase() : 'TAG';
+        const credId = `NFC-UID-${rawUid}`;
+
+        setScanningNFC(false);
+
+        const labelPrompt = prompt(`Kartu NFC Terdeteksi! (Serial: ${serial || rawUid})\nBeri nama/label untuk kartu ini:`, `Kartu NFC (${rawUid.substring(0, 6)})`);
+        const finalLabel = labelPrompt?.trim() || `Kartu NFC (${rawUid.substring(0, 6)})`;
+
+        const res = await api.registerCredential({
+          user_id: 'usr_demo_john_doe',
+          credential_id: credId,
+          label: finalLabel,
+          transports: ['nfc'],
+        });
+
+        if (res.success) {
+          setFeedback(`Kartu fisik "${finalLabel}" [${credId}] berhasil didaftarkan!`);
+          loadCredentials();
+        } else {
+          alert(res.error?.message || 'Gagal menyimpan kartu ke database.');
+        }
+      };
+    } catch (err: any) {
+      console.warn('Web NFC registration error:', err);
+      setScanningNFC(false);
+      if (err.name === 'NotAllowedError') {
+        alert('Izin akses NFC ditolak pada browser.');
+      } else {
+        alert(`Pemindaian NFC: ${err.message || 'NFC tidak aktif.'}`);
+      }
+    }
+  }
+
+  // Real Native WebAuthn Registration (FIDO2 Hardware Key / YubiKey / Passkey)
   async function handleRegisterRealWebAuthn() {
     if (typeof window === 'undefined' || !window.PublicKeyCredential) {
       alert('Browser Anda tidak mendukung WebAuthn API untuk pendaftaran hardware token.');
@@ -41,7 +97,6 @@ export default function AdminKeysPage() {
     setFeedback(null);
 
     try {
-      // 32-byte cryptographically random challenge
       const randomChallenge = new Uint8Array(32);
       window.crypto.getRandomValues(randomChallenge);
 
@@ -60,11 +115,11 @@ export default function AdminKeysPage() {
           displayName: 'Administrator (Hardware Token)',
         },
         pubKeyCredParams: [
-          { alg: -7, type: 'public-key' },  // ES256 (NFC & FIDO2 default)
-          { alg: -257, type: 'public-key' }, // RS256
+          { alg: -7, type: 'public-key' },
+          { alg: -257, type: 'public-key' },
         ],
         authenticatorSelection: {
-          authenticatorAttachment: 'cross-platform', // Prefer external hardware NFC / USB key
+          authenticatorAttachment: 'cross-platform',
           userVerification: 'preferred',
           requireResidentKey: false,
         },
@@ -77,7 +132,6 @@ export default function AdminKeysPage() {
       });
 
       if (credential) {
-        // Convert raw ID to Hex / Base64 format
         const rawIdArray = new Uint8Array(credential.rawId);
         const hexId = Array.from(rawIdArray).map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
         const shortCredId = `FIDO2-NFC-${hexId.substring(0, 16)}`;
@@ -159,11 +213,11 @@ export default function AdminKeysPage() {
               Manajemen Kunci Hardware FIDO2 NFC
             </h1>
             <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-neutral-900 text-neutral-300 border border-neutral-800">
-              WebAuthn / FIDO2 Master Vault
+              WebAuthn / Web NFC Vault
             </span>
           </div>
           <p className="text-xs sm:text-sm text-neutral-400 mt-1">
-            Pendaftaran kunci fisik asli (YubiKey / Passkey NFC), pemantauan counter tanda tangan anti-kloning, dan pencabutan status kunci seketika.
+            Pendaftaran kartu fisik (e-Money / e-KTP / YubiKey / NFC tag), inspeksi counter tanda tangan anti-kloning, dan pencabutan status kunci seketika.
           </p>
         </div>
 
@@ -183,6 +237,26 @@ export default function AdminKeysPage() {
             + Input Manual
           </button>
 
+          {/* Web NFC Tap Registration Button (for e-Money, Flazz, e-KTP) */}
+          <button
+            onClick={handleRegisterWebNFC}
+            disabled={scanningNFC}
+            className="px-3.5 py-2 rounded-md bg-neutral-900 hover:bg-neutral-800 text-cyan-300 border border-cyan-800/60 font-medium text-xs transition-colors inline-flex items-center space-x-1.5"
+          >
+            {scanningNFC ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span className="text-white">Tempelkan Kartu ke HP...</span>
+              </>
+            ) : (
+              <>
+                <CreditCard className="w-3.5 h-3.5" />
+                <span>📲 Tap Kartu Fisik HP (e-Money/e-KTP)</span>
+              </>
+            )}
+          </button>
+
+          {/* WebAuthn FIDO2 Key Registration */}
           <button
             onClick={handleRegisterRealWebAuthn}
             disabled={registeringWebAuthn}
@@ -191,12 +265,12 @@ export default function AdminKeysPage() {
             {registeringWebAuthn ? (
               <>
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>Menunggu Tap Hardware...</span>
+                <span>Menunggu Tap FIDO2...</span>
               </>
             ) : (
               <>
                 <Cpu className="w-3.5 h-3.5" />
-                <span>Daftarkan Kunci Hardware Asli (WebAuthn)</span>
+                <span>Kunci FIDO2 (YubiKey)</span>
               </>
             )}
           </button>

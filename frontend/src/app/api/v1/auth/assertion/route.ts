@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { protectedLinksStore } from '../../links/route';
+import { credentialsStore } from '../../credentials/tokens/route';
 
-// Global mock audit logs
+// Global live audit logs
 export let auditLogsStore: any[] = [
   {
     id: 'log_01',
@@ -51,8 +52,12 @@ export async function POST(request: Request) {
   // Find targeted link
   const targetLink = protectedLinksStore.find((l) => l.id === link_id || l.slug === link_id) || protectedLinksStore[0];
 
+  // Lookup card in credentialsStore
+  const matchedCred = credentialsStore.find((c) => c.credential_id === credential_id || c.id === credential_id);
+  const cardLabel = matchedCred?.label || (credential_id?.startsWith('NFC-UID-') ? `Kartu NFC Fisik (${credential_id.replace('NFC-UID-', '')})` : credential_id);
+
   // 1. Check if card is revoked
-  if (credential_id === 'FIDO2-NFC-KEY-REVOKED-03' || credential_id?.includes('REVOKED')) {
+  if (credential_id === 'FIDO2-NFC-KEY-REVOKED-03' || credential_id?.includes('REVOKED') || (matchedCred && !matchedCred.is_active)) {
     if (targetLink) {
       targetLink.total_taps += 1;
       targetLink.blocked_attempts += 1;
@@ -63,7 +68,7 @@ export async function POST(request: Request) {
       link_id: targetLink?.id,
       link_title: targetLink?.title,
       card_id: credential_id,
-      card_label: 'Compromised Token (Revoked)',
+      card_label: cardLabel,
       ip_address: '114.122.34.19',
       country: 'ID',
       status: 'SECURITY_BLOCKED',
@@ -73,7 +78,7 @@ export async function POST(request: Request) {
       success: true,
       data: {
         status: 'BLOCKED',
-        error_message: 'Kunci keamanan hardware FIDO2 NFC telah dicabut oleh Administrator (Node 19 & 20).',
+        error_message: `Kunci hardware "${cardLabel}" telah dicabut oleh Administrator (Revocation Lock - Node 19 & 20).`,
       },
       message: 'Revoked card blocked.',
     });
@@ -109,7 +114,7 @@ export async function POST(request: Request) {
 
   // 3. Link-specific Whitelist Validation (Per-Link Card Authorization Check)
   if (targetLink && targetLink.allowed_card_ids && targetLink.allowed_card_ids.length > 0) {
-    const isCardAllowed = targetLink.allowed_card_ids.includes(credential_id);
+    const isCardAllowed = targetLink.allowed_card_ids.includes(credential_id) || (matchedCred && targetLink.allowed_card_ids.includes(matchedCred.credential_id));
     if (!isCardAllowed) {
       targetLink.total_taps += 1;
       targetLink.blocked_attempts += 1;
@@ -120,7 +125,7 @@ export async function POST(request: Request) {
         link_id: targetLink.id,
         link_title: targetLink.title,
         card_id: credential_id,
-        card_label: credential_id === 'FIDO2-NFC-KEY-BETA-02' ? 'Feitian ePass (Beta Key)' : 'Kartu NFC Tidak Dikenal',
+        card_label: cardLabel,
         ip_address: '114.122.34.19',
         country: 'ID',
         status: 'SECURITY_BLOCKED',
@@ -131,7 +136,8 @@ export async function POST(request: Request) {
         success: true,
         data: {
           status: 'UNAUTHORIZED_CARD',
-          error_message: `Akses Ditolak: Kartu NFC "${credential_id}" tidak terdaftar dalam whitelist link "${targetLink.title}".`,
+          error_message: `Akses Ditolak: Kartu "${cardLabel}" (${credential_id}) belum terdaftar dalam whitelist link "${targetLink.title}".`,
+          detected_card_id: credential_id,
         },
         message: 'Card not in link whitelist.',
       });
@@ -144,13 +150,18 @@ export async function POST(request: Request) {
     targetLink.successful_passes += 1;
   }
 
+  if (matchedCred) {
+    matchedCred.sign_count = (matchedCred.sign_count || 0) + 1;
+    matchedCred.last_used_at = new Date().toISOString();
+  }
+
   auditLogsStore.unshift({
     id: `log_${Date.now()}`,
     event_type: 'SSO_LOGIN_SUCCESS',
     link_id: targetLink?.id,
     link_title: targetLink?.title,
     card_id: credential_id,
-    card_label: credential_id === 'FIDO2-NFC-KEY-ALPHA-01' ? 'YubiKey 5 NFC (Alpha Key)' : 'Feitian ePass (Beta Key)',
+    card_label: cardLabel,
     ip_address: '114.122.34.19',
     country: 'ID',
     status: 'SUCCESS',
@@ -172,6 +183,7 @@ export async function POST(request: Request) {
       user_id: 'usr_demo_john_doe',
       auth_method: 'WEBAUTHN_NFC',
       link_title: targetLink?.title,
+      card_label: cardLabel,
     },
     message: `WebAuthn assertion verified and authorized for link "${targetLink?.title}".`,
   });
