@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Shield, Radio, Layers, Key, Server, Terminal, Sliders, AlertCircle } from 'lucide-react';
+import { Shield, Radio, Layers, Key, Server, Terminal, Sliders, AlertCircle, Link2 } from 'lucide-react';
 
 export function Navigation() {
 
@@ -12,7 +12,7 @@ export function Navigation() {
   const navItems = [
     { label: 'Overview', href: '/', icon: Layers },
     { label: 'SSO Gateway', href: '/sso/login?client_id=client_portal_alpha&redirect_uri=/sso/callback&state=demo_state_123', icon: Radio },
-
+    { label: 'Links', href: '/admin/links', icon: Link2 },
     { label: 'Telemetry', href: '/admin/dashboard', icon: Server },
     { label: 'Topology 72N', href: '/admin/topology', icon: Layers },
     { label: 'Clients', href: '/admin/clients', icon: Shield },
@@ -21,6 +21,7 @@ export function Navigation() {
     { label: 'DLQ', href: '/admin/dlq', icon: AlertCircle },
     { label: 'Simulator', href: '/simulator', icon: Terminal },
   ];
+
 
   return (
     <header className="sticky top-0 z-50 bg-black/80 backdrop-blur-md border-b border-border">

@@ -49,12 +49,33 @@ export interface SecurityPolicy {
   updated_at?: string;
 }
 
+export interface ProtectedLink {
+  id: string;
+  title: string;
+  slug: string;
+  target_redirect_url: string;
+  allowed_card_ids: string[];
+  require_pin: boolean;
+  geofence_enabled: boolean;
+  allowed_countries: string[];
+  is_active: boolean;
+  total_taps: number;
+  successful_passes: number;
+  blocked_attempts: number;
+  created_at: string;
+  updated_at?: string;
+}
+
 export interface AuditLog {
   id: string;
   event_type: string;
   status: string;
   user_id?: string;
   client_id?: string;
+  link_id?: string;
+  link_title?: string;
+  card_id?: string;
+  card_label?: string;
   ip_address?: string;
   country?: string;
   city?: string;
@@ -64,6 +85,7 @@ export interface AuditLog {
   os_name?: string;
   created_at: string;
 }
+
 
 export interface DLQWebhook {
   id: string;
