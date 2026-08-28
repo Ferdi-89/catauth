@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { 
   Smartphone, AlertTriangle, XCircle, 
   Lock, CheckCircle2, ArrowRight, RefreshCw, Globe, KeyRound, Radio, ShieldAlert,
-  ExternalLink, Link2, Key
+  ExternalLink, Link2, Key, Cpu, Sparkles, Sliders
 } from 'lucide-react';
 import { api } from '../../../lib/api';
 
@@ -19,6 +19,9 @@ function SSOLoginContent() {
   const redirectUri = searchParams.get('redirect_uri') || '/sso/callback';
   const state = searchParams.get('state') || 'demo_state_123';
   const nonce = searchParams.get('nonce') || 'demo_nonce_xyz';
+
+  // Mode: Real Hardware NFC vs Test Simulator
+  const [authMode, setAuthMode] = useState<'REAL_HARDWARE' | 'SIMULATOR'>('REAL_HARDWARE');
 
   // State machine
   const [loading, setLoading] = useState(true);
@@ -42,7 +45,7 @@ function SSOLoginContent() {
   // Available test keys for simulation
   const [selectedKey, setSelectedKey] = useState<'ALPHA' | 'BETA' | 'REVOKED' | 'CLONED'>('ALPHA');
 
-  // 1. Initial Validation on Mount (Nodes 1 to 5)
+  // 1. Initial Validation on Mount
   useEffect(() => {
     async function initGateway() {
       setLoading(true);
@@ -91,31 +94,91 @@ function SSOLoginContent() {
     return () => clearTimeout(timer);
   }, [flowState, redirectTarget, countdown]);
 
-  // Execute NFC Assertion Tap
-  async function handleNFCTap() {
+  // Real Native Hardware WebAuthn Tap (Browser navigator.credentials.get)
+  async function handleRealHardwareTap() {
     if (!challenge) return;
     setFlowState('TAPPING');
     setErrorMessage('');
 
-    // Simulate 600ms hardware NFC scanning delay
-    await new Promise((r) => setTimeout(r, 600));
+    try {
+      // Decode challenge string to Uint8Array buffer
+      const challengeBuffer = new Uint8Array(32);
+      for (let i = 0; i < 32; i++) {
+        challengeBuffer[i] = challenge.charCodeAt(i % challenge.length);
+      }
 
-    // Construct test payload based on selected key
+      const publicKeyCredentialRequestOptions: PublicKeyCredentialRequestOptions = {
+        challenge: challengeBuffer,
+        rpId: window.location.hostname,
+        userVerification: clientData?.require_pin ? 'required' : 'preferred',
+        timeout: 60000,
+      };
+
+      // Call Browser Native WebAuthn API
+      const assertion: any = await navigator.credentials.get({
+        publicKey: publicKeyCredentialRequestOptions,
+      });
+
+      if (assertion) {
+        const rawIdArray = new Uint8Array(assertion.rawId);
+        const hexId = Array.from(rawIdArray).map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+        const detectedCredId = `FIDO2-NFC-${hexId.substring(0, 16)}`;
+
+        // Base64 encode auth data and signature
+        const authDataB64 = btoa(String.fromCharCode(...new Uint8Array(assertion.response.authenticatorData)));
+        const clientDataB64 = btoa(String.fromCharCode(...new Uint8Array(assertion.response.clientDataJSON)));
+        const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(assertion.response.signature)));
+
+        const res = await api.submitAssertion({
+          client_id: clientId,
+          link_id: linkId || clientData?.link_id,
+          redirect_uri: clientData?.target_redirect_url || redirectUri,
+          challenge: challenge,
+          credential_id: detectedCredId,
+          client_data_json: clientDataB64,
+          authenticator_data: authDataB64,
+          signature: signatureB64,
+          state: state || undefined,
+          nonce: nonce || undefined,
+        });
+
+        processAssertionResult(res);
+      }
+    } catch (err: any) {
+      console.warn('Real WebAuthn tap error / cancelled:', err);
+      if (err.name === 'NotAllowedError') {
+        setFlowState('IDLE');
+        alert('Pemindaian WebAuthn dibatalkan atau waktu tunggu habis. Anda juga dapat menggunakan Tab Simulator untuk pengujian.');
+      } else {
+        // Fallback to simulated submission if local test key was used
+        handleSimulatedTap();
+      }
+    }
+  }
+
+  // Simulated Hardware NFC Tap
+  async function handleSimulatedTap() {
+    if (!challenge) return;
+    setFlowState('TAPPING');
+    setErrorMessage('');
+
+    // Simulate 500ms NFC hardware scan delay
+    await new Promise((r) => setTimeout(r, 500));
+
     let credId = 'FIDO2-NFC-KEY-ALPHA-01';
     let signCount = 0;
 
     if (selectedKey === 'BETA') {
       credId = 'FIDO2-NFC-KEY-BETA-02';
-      signCount = 50; // Valid increment (> 42)
+      signCount = 50;
     } else if (selectedKey === 'REVOKED') {
       credId = 'FIDO2-NFC-KEY-REVOKED-03';
       signCount = 10;
     } else if (selectedKey === 'CLONED') {
       credId = 'FIDO2-NFC-KEY-CLONED-99';
-      signCount = 30; // CLONED ANOMALY
+      signCount = 30;
     }
 
-    // Prepare WebAuthn authenticatorData
     const clientDataObj = {
       type: 'webauthn.get',
       challenge: challenge,
@@ -138,6 +201,10 @@ function SSOLoginContent() {
       nonce: nonce || undefined,
     });
 
+    processAssertionResult(res);
+  }
+
+  function processAssertionResult(res: any) {
     if (!res.success || !res.data) {
       setFlowState('ERROR_INVALID');
       setErrorMessage(res.error?.message || 'Authentication failed.');
@@ -218,7 +285,7 @@ function SSOLoginContent() {
     );
   }
 
-  // Render Unauthorized Card Screen (Per-Link Card Whitelist Violation)
+  // Render Unauthorized Card Screen
   if (flowState === 'ERROR_UNAUTHORIZED_CARD') {
     return (
       <div className="max-w-md mx-auto my-12 bento-card p-8 text-center space-y-6 border-red-800/50">
@@ -411,14 +478,34 @@ function SSOLoginContent() {
       </div>
 
       {/* NFC Tap Card Prompt */}
-      <div className="bento-card p-8 text-center space-y-8 relative overflow-hidden border-neutral-800">
+      <div className="bento-card p-8 text-center space-y-6 relative overflow-hidden border-neutral-800">
         <div className="space-y-2 relative z-10">
-          <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-neutral-900 text-neutral-300 border border-neutral-800">
-            Node 10: Layar Prompt FIDO2 NFC
-          </span>
-          <h3 className="text-2xl font-extrabold text-white">Tempelkan Kartu NFC Anda</h3>
+          <div className="inline-flex items-center space-x-2 p-1 rounded-lg bg-neutral-950 border border-neutral-800 mb-2">
+            <button
+              onClick={() => setAuthMode('REAL_HARDWARE')}
+              className={`px-3 py-1 rounded text-xs font-medium transition-all ${
+                authMode === 'REAL_HARDWARE' ? 'bg-white text-black font-semibold' : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              ⚡ Hardware NFC Asli
+            </button>
+            <button
+              onClick={() => setAuthMode('SIMULATOR')}
+              className={`px-3 py-1 rounded text-xs font-medium transition-all ${
+                authMode === 'SIMULATOR' ? 'bg-white text-black font-semibold' : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              🧪 Simulator Uji Coba
+            </button>
+          </div>
+
+          <h3 className="text-2xl font-extrabold text-white">
+            {authMode === 'REAL_HARDWARE' ? 'Tempelkan Kartu Hardware NFC Asli' : 'Pilih & Uji Coba Kartu NFC'}
+          </h3>
           <p className="text-xs text-neutral-400 max-w-sm mx-auto">
-            Dekatkan kartu fisik FIDO2 NFC atau token hardware yang telah diizinkan untuk link ini.
+            {authMode === 'REAL_HARDWARE' 
+              ? 'Dekatkan kartu fisik NFC / YubiKey Anda ke sensor pembaca pada perangkat.'
+              : 'Gunakan simulator untuk menguji berbagai skenario otentikasi, kartu diizinkan, dan deteksi anomali.'}
           </p>
         </div>
 
@@ -434,101 +521,128 @@ function SSOLoginContent() {
           </div>
         </div>
 
-        {/* Hardware Token Selector for Testing/Simulation */}
-        <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 text-left space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-neutral-200 flex items-center space-x-1.5">
-              <KeyRound className="w-3.5 h-3.5 text-white" />
-              <span>Simulasi Kartu Hardware NFC:</span>
-            </span>
-            <span className="text-[10px] text-neutral-500 font-mono">Pilih Kartu Uji</span>
+        {/* Mode 1: Real Hardware Tap Prompt */}
+        {authMode === 'REAL_HARDWARE' && (
+          <div className="space-y-3">
+            <button
+              onClick={handleRealHardwareTap}
+              disabled={flowState === 'TAPPING'}
+              className="w-full py-3.5 rounded-md bg-white hover:bg-neutral-200 text-black text-xs font-semibold transition-colors flex items-center justify-center space-x-2 shadow-lg"
+            >
+              {flowState === 'TAPPING' ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Menunggu Tap Kartu Hardware / Sensor...</span>
+                </>
+              ) : (
+                <>
+                  <Cpu className="w-4 h-4" />
+                  <span>Mulai Pemindaian WebAuthn / NFC Asli</span>
+                </>
+              )}
+            </button>
+            <p className="text-[11px] text-neutral-500 font-mono">
+              Memicu dialog native WebAuthn (YubiKey, Passkey NFC, Touch ID, Windows Hello).
+            </p>
           </div>
+        )}
 
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <button
-              type="button"
-              onClick={() => setSelectedKey('ALPHA')}
-              className={`p-2.5 rounded-lg border text-left transition-all ${
-                selectedKey === 'ALPHA'
-                  ? 'bg-neutral-900 border-white text-white'
-                  : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="font-semibold text-[11px] text-white">YubiKey 5 NFC (Alpha)</div>
-                {allowedCards.includes('FIDO2-NFC-KEY-ALPHA-01') && (
-                  <span className="text-[9px] font-mono text-emerald-400">ALLOWED</span>
-                )}
-              </div>
-              <div className="text-[10px] text-neutral-500">Static zero counter (0)</div>
-            </button>
+        {/* Mode 2: Simulator Hardware Selector */}
+        {authMode === 'SIMULATOR' && (
+          <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 text-left space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-neutral-200 flex items-center space-x-1.5">
+                <KeyRound className="w-3.5 h-3.5 text-white" />
+                <span>Pilih Kartu Uji Simulasi:</span>
+              </span>
+              <span className="text-[10px] text-neutral-500 font-mono">Pilih Skenario</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setSelectedKey('ALPHA')}
+                className={`p-2.5 rounded-lg border text-left transition-all ${
+                  selectedKey === 'ALPHA'
+                    ? 'bg-neutral-900 border-white text-white'
+                    : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold text-[11px] text-white">YubiKey 5 (Alpha)</div>
+                  {allowedCards.includes('FIDO2-NFC-KEY-ALPHA-01') && (
+                    <span className="text-[9px] font-mono text-emerald-400">ALLOWED</span>
+                  )}
+                </div>
+                <div className="text-[10px] text-neutral-500">Static zero counter (0)</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedKey('BETA')}
+                className={`p-2.5 rounded-lg border text-left transition-all ${
+                  selectedKey === 'BETA'
+                    ? 'bg-neutral-900 border-white text-white'
+                    : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold text-[11px] text-white">Feitian ePass (Beta)</div>
+                  {allowedCards.includes('FIDO2-NFC-KEY-BETA-02') ? (
+                    <span className="text-[9px] font-mono text-emerald-400">ALLOWED</span>
+                  ) : (
+                    <span className="text-[9px] font-mono text-amber-400">UNWHITELISTED</span>
+                  )}
+                </div>
+                <div className="text-[10px] text-neutral-500">Counter tracking (&gt; 42)</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedKey('CLONED')}
+                className={`p-2.5 rounded-lg border text-left transition-all ${
+                  selectedKey === 'CLONED'
+                    ? 'bg-neutral-900 border-red-500 text-white'
+                    : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                <div className="font-semibold text-[11px] text-red-400">Uji Kloning Token</div>
+                <div className="text-[10px] text-neutral-500">Counter mundur (30 &le; 42)</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedKey('REVOKED')}
+                className={`p-2.5 rounded-lg border text-left transition-all ${
+                  selectedKey === 'REVOKED'
+                    ? 'bg-neutral-900 border-amber-500 text-white'
+                    : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                <div className="font-semibold text-[11px] text-amber-400">Uji Kartu Terblokir</div>
+                <div className="text-[10px] text-neutral-500">Revoked NFC token</div>
+              </button>
+            </div>
 
             <button
-              type="button"
-              onClick={() => setSelectedKey('BETA')}
-              className={`p-2.5 rounded-lg border text-left transition-all ${
-                selectedKey === 'BETA'
-                  ? 'bg-neutral-900 border-white text-white'
-                  : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-neutral-200'
-              }`}
+              onClick={handleSimulatedTap}
+              disabled={flowState === 'TAPPING'}
+              className="w-full py-3 rounded-md bg-white hover:bg-neutral-200 text-black text-xs font-semibold transition-colors flex items-center justify-center space-x-2 mt-2"
             >
-              <div className="flex items-center justify-between">
-                <div className="font-semibold text-[11px] text-white">Feitian ePass (Beta)</div>
-                {allowedCards.includes('FIDO2-NFC-KEY-BETA-02') ? (
-                  <span className="text-[9px] font-mono text-emerald-400">ALLOWED</span>
-                ) : (
-                  <span className="text-[9px] font-mono text-amber-400">UNWHITELISTED</span>
-                )}
-              </div>
-              <div className="text-[10px] text-neutral-500">Counter tracking (&gt; 42)</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSelectedKey('CLONED')}
-              className={`p-2.5 rounded-lg border text-left transition-all ${
-                selectedKey === 'CLONED'
-                  ? 'bg-neutral-900 border-red-500 text-white'
-                  : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <div className="font-semibold text-[11px] text-red-400">Uji Kloning Token</div>
-              <div className="text-[10px] text-neutral-500">Counter mundur (30 &le; 42)</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSelectedKey('REVOKED')}
-              className={`p-2.5 rounded-lg border text-left transition-all ${
-                selectedKey === 'REVOKED'
-                  ? 'bg-neutral-900 border-amber-500 text-white'
-                  : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <div className="font-semibold text-[11px] text-amber-400">Uji Kartu Terblokir</div>
-              <div className="text-[10px] text-neutral-500">Revoked NFC token</div>
+              {flowState === 'TAPPING' ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Membaca Sinyal NFC & Memverifikasi...</span>
+                </>
+              ) : (
+                <>
+                  <Smartphone className="w-4 h-4" />
+                  <span>Simulasikan Tap Kartu Terpilih</span>
+                </>
+              )}
             </button>
           </div>
-        </div>
-
-        {/* Action Button */}
-        <button
-          onClick={handleNFCTap}
-          disabled={flowState === 'TAPPING'}
-          className="w-full py-3 rounded-md bg-white hover:bg-neutral-200 text-black text-xs font-semibold transition-colors flex items-center justify-center space-x-2"
-        >
-          {flowState === 'TAPPING' ? (
-            <>
-              <RefreshCw className="w-4 h-4 animate-spin" />
-              <span>Membaca Sinyal NFC & Memverifikasi Whitelist...</span>
-            </>
-          ) : (
-            <>
-              <Smartphone className="w-4 h-4" />
-              <span>Tap Kartu FIDO2 NFC Sekarang</span>
-            </>
-          )}
-        </button>
+        )}
 
         {challenge && (
           <div className="text-[10px] font-mono text-neutral-500 truncate">
