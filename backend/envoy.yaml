@@ -1,0 +1,74 @@
+# Envoy Ingress Proxy Configuration with Edge Token Bucket Rate Limiting (Node 7 / node-12)
+# Catauth Architecture V8 (Edge Ingress Token Bucket Filter)
+
+static_resources:
+  listeners:
+  - name: ingress_listener
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 8080
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress_http
+          codec_type: AUTO
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: catauth_vhost
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: fastapi_backend
+                  timeout: 10s
+                  rate_limits:
+                  - actions:
+                    - request_headers:
+                        header_name: "cf-connecting-ip"
+                        descriptor_key: "client_ip"
+          http_filters:
+          - name: envoy.filters.http.local_ratelimit
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+              stat_prefix: http_local_rate_limiter
+              token_bucket:
+                max_tokens: 20
+                tokens_per_fill: 10
+                fill_interval: 1s
+              filter_enabled:
+                runtime_key: local_rate_limit_enabled
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              filter_enforced:
+                runtime_key: local_rate_limit_enforced
+                default_value:
+                  numerator: 100
+                  denominator: HUNDRED
+              response_headers_to_add:
+              - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                header:
+                  key: x-local-rate-limit
+                  value: 'true'
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+  - name: fastapi_backend
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: fastapi_backend
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: 8000
