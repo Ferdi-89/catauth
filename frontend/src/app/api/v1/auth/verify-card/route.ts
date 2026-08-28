@@ -63,11 +63,14 @@ export async function POST(request: Request) {
       (c) => c.credential_id === normalizedCardId || c.credential_id === card_id || c.id === card_id
     );
 
-    // If not found in store but has valid hardware UID, auto-register as new pending card
+    // If not found in store but has valid hardware UID, auto-register as new card with active status
     if (!matchedCred && normalizedCardId.startsWith('NFC-UID-')) {
       const newAutoCred = {
         id: `cred_${Date.now()}`,
-        user_id: 'usr_demo_john_doe',
+        user_id: 'usr_ferdi_admin',
+        user_name: 'Ferdi Pratama',
+        user_email: 'ferdi@catauth.io',
+        user_role: 'ADMIN',
         credential_id: normalizedCardId,
         label: `Kartu Fisik (${normalizedCardId.replace('NFC-UID-', '')})`,
         sign_count: 0,
@@ -83,7 +86,10 @@ export async function POST(request: Request) {
     }
 
     const cardLabel = matchedCred?.label || `Kartu NFC Fisik (${normalizedCardId.replace('NFC-UID-', '')})`;
-    const userId = matchedCred?.user_id || 'usr_demo_john_doe';
+    const userId = matchedCred?.user_id || 'usr_ferdi_admin';
+    const userName = matchedCred?.user_name || 'Ferdi Pratama';
+    const userEmail = matchedCred?.user_email || `${userId.replace('usr_', '')}@catauth.io`;
+    const userRole = matchedCred?.user_role || 'ADMIN';
 
     // 1. Check if card is revoked
     if (matchedCred && !matchedCred.is_active) {
@@ -154,7 +160,7 @@ export async function POST(request: Request) {
             authenticated: false,
             error: {
               code: 'UNAUTHORIZED_FOR_LINK',
-              message: `Kartu "${cardLabel}" (${normalizedCardId}) belum didaftarkan dalam whitelist link "${targetLink.title}". Silakan buka menu Links di dashboard Catauth dan centang kartu ini.`,
+              message: `Kartu "${cardLabel}" (${normalizedCardId}) milik ${userName} belum didaftarkan dalam whitelist link "${targetLink.title}". Silakan buka menu Links di dashboard Catauth dan centang kartu ini atau aktifkan "Izinkan Semua Kartu Terdaftar".`,
               detected_card_id: normalizedCardId,
               link_title: targetLink.title,
             },
@@ -180,6 +186,9 @@ export async function POST(request: Request) {
     const jwtPayload = {
       iss: 'https://catauth.io',
       sub: userId,
+      name: userName,
+      email: userEmail,
+      role: userRole,
       aud: link_id || client_id || 'embedded_web_app',
       auth_status: 'SUCCESS',
       auth_method: 'WEBAUTHN_NFC_API',
@@ -213,8 +222,9 @@ export async function POST(request: Request) {
       authenticated: true,
       user: {
         user_id: userId,
-        name: userId === 'usr_demo_john_doe' ? 'John Doe' : 'Administrator',
-        email: `${userId.replace('usr_', '')}@catauth.io`,
+        name: userName,
+        email: userEmail,
+        role: userRole,
         card_id: normalizedCardId,
         card_label: cardLabel,
         sign_count: matchedCred?.sign_count || 1,
@@ -223,7 +233,7 @@ export async function POST(request: Request) {
       auth_token: authToken,
       token_type: 'Bearer',
       expires_in: 86400,
-      message: `Kartu "${cardLabel}" terverifikasi. Pengguna berhasil diautentikasi.`,
+      message: `Kartu "${cardLabel}" milik ${userName} terverifikasi. Berhasil login sebagai ${userRole}.`,
     });
   } catch (err: any) {
     return corsResponse({

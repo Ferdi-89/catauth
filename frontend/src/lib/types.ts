@@ -25,6 +25,9 @@ export interface ClientApp {
 export interface FIDO2Credential {
   id: string;
   user_id: string;
+  user_name?: string;
+  user_email?: string;
+  user_role?: string;
   credential_id: string;
   label: string;
   sign_count: number;
@@ -53,11 +56,12 @@ export interface ProtectedLink {
   id: string;
   title: string;
   slug: string;
+  description?: string;
   target_redirect_url: string;
   allowed_card_ids: string[];
   require_pin: boolean;
   geofence_enabled: boolean;
-  allowed_countries: string[];
+  allowed_countries?: string[];
   is_active: boolean;
   total_taps: number;
   successful_passes: number;
@@ -85,7 +89,6 @@ export interface AuditLog {
   os_name?: string;
   created_at: string;
 }
-
 
 export interface DLQWebhook {
   id: string;
@@ -136,7 +139,6 @@ export type NodeType =
   | 'STORAGE'
   | 'COMMENT'
   | 'LOGIC-MULTI';
-
 
 export interface WorkflowNode {
   id: string;

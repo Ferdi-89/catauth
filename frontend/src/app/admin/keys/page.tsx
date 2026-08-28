@@ -3,7 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
   KeyRound, Shield, Ban, CheckCircle2, RefreshCw, Smartphone, Plus, 
-  Trash2, ShieldCheck, ShieldAlert, Cpu, Sparkles, Check, CreditCard, Info 
+  Trash2, ShieldCheck, ShieldAlert, Cpu, Sparkles, Check, CreditCard, Info,
+  UserCheck, Mail, User, ShieldCheck as RoleIcon, Edit3
 } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { FIDO2Credential } from '../../../lib/types';
@@ -13,9 +14,21 @@ export default function AdminKeysPage() {
   const [loading, setLoading] = useState(true);
   const [registeringWebAuthn, setRegisteringWebAuthn] = useState(false);
   const [scanningNFC, setScanningNFC] = useState(false);
-  const [showManualModal, setShowManualModal] = useState(false);
-  const [manualLabel, setManualLabel] = useState('');
-  const [manualId, setManualId] = useState('');
+  
+  // Registration Modal State
+  const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [modalType, setModalType] = useState<'NFC' | 'FIDO2' | 'MANUAL'>('NFC');
+  const [formCardId, setFormCardId] = useState('');
+  const [formLabel, setFormLabel] = useState('');
+  const [formUserName, setFormUserName] = useState('Ferdi Pratama');
+  const [formUserId, setFormUserId] = useState('usr_ferdi_admin');
+  const [formEmail, setFormEmail] = useState('ferdi@catauth.io');
+  const [formRole, setFormRole] = useState('ADMIN');
+
+  // Edit Modal State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingCred, setEditingCred] = useState<FIDO2Credential | null>(null);
+
   const [feedback, setFeedback] = useState<string | null>(null);
 
   async function loadCredentials() {
@@ -39,7 +52,7 @@ export default function AdminKeysPage() {
     }
 
     setScanningNFC(true);
-    setFeedback('Membuka sensor NFC... Silakan tempelkan kartu ke belakang HP!');
+    setFeedback('Membuka sensor NFC... Silakan tempelkan kartu fisik ke belakang HP sekarang!');
 
     try {
       const NDEFReaderClass = (window as any).NDEFReader;
@@ -57,23 +70,10 @@ export default function AdminKeysPage() {
         const credId = `NFC-UID-${rawUid}`;
 
         setScanningNFC(false);
-
-        const labelPrompt = prompt(`Kartu NFC Terdeteksi! (Serial: ${serial || rawUid})\nBeri nama/label untuk kartu ini:`, `Kartu NFC (${rawUid.substring(0, 6)})`);
-        const finalLabel = labelPrompt?.trim() || `Kartu NFC (${rawUid.substring(0, 6)})`;
-
-        const res = await api.registerCredential({
-          user_id: 'usr_demo_john_doe',
-          credential_id: credId,
-          label: finalLabel,
-          transports: ['nfc'],
-        });
-
-        if (res.success) {
-          setFeedback(`Kartu fisik "${finalLabel}" [${credId}] berhasil didaftarkan!`);
-          loadCredentials();
-        } else {
-          alert(res.error?.message || 'Gagal menyimpan kartu ke database.');
-        }
+        setFormCardId(credId);
+        setFormLabel(`Kartu NFC Fisik (${rawUid.substring(0, 6)})`);
+        setModalType('NFC');
+        setShowRegisterModal(true);
       };
     } catch (err: any) {
       console.warn('Web NFC registration error:', err);
@@ -99,7 +99,6 @@ export default function AdminKeysPage() {
     try {
       const randomChallenge = new Uint8Array(32);
       window.crypto.getRandomValues(randomChallenge);
-
       const userId = new Uint8Array(16);
       window.crypto.getRandomValues(userId);
 
@@ -136,30 +135,14 @@ export default function AdminKeysPage() {
         const hexId = Array.from(rawIdArray).map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
         const shortCredId = `FIDO2-NFC-${hexId.substring(0, 16)}`;
 
-        const labelPrompt = prompt('Kunci Hardware Terdeteksi! Beri nama/label untuk kartu ini:', `Hardware Key (${hexId.substring(0, 8)})`);
-        const finalLabel = labelPrompt?.trim() || `Hardware Key (${hexId.substring(0, 8)})`;
-
-        const transports = credential.response?.getTransports?.() || ['nfc', 'usb'];
-
-        const res = await api.registerCredential({
-          user_id: 'usr_admin_master',
-          credential_id: shortCredId,
-          label: finalLabel,
-          transports: transports.length > 0 ? transports : ['nfc', 'usb'],
-        });
-
-        if (res.success) {
-          setFeedback(`Kunci hardware fisik "${finalLabel}" [${shortCredId}] berhasil didaftarkan secara kriptografis!`);
-          loadCredentials();
-        } else {
-          alert(res.error?.message || 'Gagal menyimpan kredensial ke server.');
-        }
+        setFormCardId(shortCredId);
+        setFormLabel(`YubiKey FIDO2 (${hexId.substring(0, 6)})`);
+        setModalType('FIDO2');
+        setShowRegisterModal(true);
       }
     } catch (err: any) {
       console.warn('WebAuthn registration error:', err);
-      if (err.name === 'NotAllowedError') {
-        alert('Pendaftaran dibatalkan atau waktu tunggu habis.');
-      } else {
+      if (err.name !== 'NotAllowedError') {
         alert(`Pendaftaran WebAuthn: ${err.message || 'Gagal membaca kunci hardware.'}`);
       }
     } finally {
@@ -167,28 +150,66 @@ export default function AdminKeysPage() {
     }
   }
 
-  // Handle Manual Registration
-  async function handleManualSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!manualLabel.trim()) return;
+  function handleOpenManual() {
+    setFormCardId(`NFC-UID-${Date.now().toString(36).toUpperCase()}`);
+    setFormLabel('Kartu e-Money / Flazz Baru');
+    setModalType('MANUAL');
+    setShowRegisterModal(true);
+  }
 
-    const credId = manualId.trim() || `FIDO2-NFC-${Date.now().toString(36).toUpperCase()}`;
+  async function handleSaveRegister(e: React.FormEvent) {
+    e.preventDefault();
+    if (!formLabel.trim() || !formUserName.trim()) return;
 
     const res = await api.registerCredential({
-      user_id: 'usr_demo_john_doe',
-      credential_id: credId,
-      label: manualLabel,
-      transports: ['nfc'],
+      user_id: formUserId || `usr_${formUserName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
+      user_name: formUserName,
+      user_email: formEmail,
+      user_role: formRole,
+      credential_id: formCardId,
+      label: formLabel,
+      transports: modalType === 'FIDO2' ? ['nfc', 'usb'] : ['nfc'],
     });
 
     if (res.success) {
-      setShowManualModal(false);
-      setManualLabel('');
-      setManualId('');
-      setFeedback(`Kunci "${manualLabel}" berhasil ditambahkan.`);
+      setShowRegisterModal(false);
+      setFeedback(`Kartu "${formLabel}" [${formCardId}] berhasil diikatkan ke akun ${formUserName}!`);
       loadCredentials();
     } else {
-      alert(res.error?.message || 'Gagal mendaftarkan kunci.');
+      alert(res.error?.message || 'Gagal mendaftarkan kartu.');
+    }
+  }
+
+  function handleOpenEdit(cred: FIDO2Credential) {
+    setEditingCred(cred);
+    setFormCardId(cred.credential_id);
+    setFormLabel(cred.label);
+    setFormUserName(cred.user_name || cred.label);
+    setFormUserId(cred.user_id);
+    setFormEmail(cred.user_email || `${cred.user_id}@catauth.io`);
+    setFormRole(cred.user_role || 'ADMIN');
+    setShowEditModal(true);
+  }
+
+  async function handleSaveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingCred) return;
+
+    const res = await api.updateCredentialProfile({
+      credential_id: editingCred.credential_id,
+      user_id: formUserId,
+      user_name: formUserName,
+      user_email: formEmail,
+      user_role: formRole,
+      label: formLabel,
+    });
+
+    if (res.success) {
+      setShowEditModal(false);
+      setFeedback(`Profil akun pemilik kartu "${formLabel}" berhasil diperbarui.`);
+      loadCredentials();
+    } else {
+      alert(res.error?.message || 'Gagal memperbarui akun.');
     }
   }
 
@@ -210,14 +231,14 @@ export default function AdminKeysPage() {
         <div>
           <div className="flex items-center space-x-2">
             <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-              Manajemen Kunci Hardware FIDO2 NFC
+              Hardware NFC & User Account Vault
             </h1>
             <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-neutral-900 text-neutral-300 border border-neutral-800">
-              WebAuthn / Web NFC Vault
+              Identity Binding & WebAuthn
             </span>
           </div>
           <p className="text-xs sm:text-sm text-neutral-400 mt-1">
-            Pendaftaran kartu fisik (e-Money / e-KTP / YubiKey / NFC tag), inspeksi counter tanda tangan anti-kloning, dan pencabutan status kunci seketika.
+            Hubungkan kartu fisik (e-Money / e-KTP / YubiKey) ke akun pengguna Anda (Nama, Email, Role). Ketika kartu di-tap, sistem langsung mengetahui akun yang login.
           </p>
         </div>
 
@@ -231,13 +252,13 @@ export default function AdminKeysPage() {
           </button>
 
           <button
-            onClick={() => setShowManualModal(true)}
+            onClick={handleOpenManual}
             className="px-3 py-2 rounded-md bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border border-neutral-800 font-medium text-xs transition-colors"
           >
             + Input Manual
           </button>
 
-          {/* Web NFC Tap Registration Button (for e-Money, Flazz, e-KTP) */}
+          {/* Web NFC Tap Registration Button */}
           <button
             onClick={handleRegisterWebNFC}
             disabled={scanningNFC}
@@ -251,7 +272,7 @@ export default function AdminKeysPage() {
             ) : (
               <>
                 <CreditCard className="w-3.5 h-3.5" />
-                <span>📲 Tap Kartu Fisik HP (e-Money/e-KTP)</span>
+                <span>📲 Tap Kartu Fisik HP</span>
               </>
             )}
           </button>
@@ -299,53 +320,79 @@ export default function AdminKeysPage() {
                 : 'border-red-950/80 bg-red-950/10'
             }`}
           >
-            <div className="space-y-3">
+            <div className="space-y-3.5">
+              {/* Card Label & Status */}
               <div className="flex items-start justify-between">
                 <div className="flex items-center space-x-3">
                   <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
                     c.is_active 
-                      ? 'bg-neutral-900 border border-neutral-800 text-white' 
+                      ? 'bg-neutral-900 border border-neutral-800 text-cyan-400' 
                       : 'bg-red-950/40 border border-red-800/40 text-red-400'
                   }`}>
                     <KeyRound className="w-5 h-5" />
                   </div>
                   <div>
                     <h3 className="font-bold text-white text-sm">{c.label}</h3>
-                    <p className="text-[10px] font-mono text-neutral-500 truncate max-w-[150px]">{c.credential_id}</p>
+                    <p className="text-[10px] font-mono text-cyan-400 truncate max-w-[150px] font-semibold">{c.credential_id}</p>
                   </div>
                 </div>
 
-                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                  c.is_active 
-                    ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-800/40' 
-                    : 'bg-red-950/60 text-red-400 border border-red-800/40'
-                }`}>
-                  {c.is_active ? 'ACTIVE' : 'REVOKED'}
-                </span>
+                <div className="flex items-center space-x-1.5">
+                  <button
+                    onClick={() => handleOpenEdit(c)}
+                    className="p-1.5 rounded hover:bg-neutral-900 text-neutral-400 hover:text-white"
+                    title="Edit Profil Pemilik Akun"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                  </button>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                    c.is_active 
+                      ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-800/40' 
+                      : 'bg-red-950/60 text-red-400 border border-red-800/40'
+                  }`}>
+                    {c.is_active ? 'ACTIVE' : 'REVOKED'}
+                  </span>
+                </div>
               </div>
 
-              {/* Signature Counter & Invariant */}
-              <div className="space-y-2 text-xs font-mono pt-1">
-                <div className="flex items-center justify-between p-2.5 rounded bg-neutral-950 border border-neutral-900">
-                  <span className="text-neutral-400 text-[11px]">Signature Counter:</span>
-                  <span className="text-cyan-300 font-bold font-mono">{c.sign_count}</span>
+              {/* Linked User Account Profile (The Account Information!) */}
+              <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800/90 space-y-1.5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-neutral-500 font-mono">Akun Terikat (User Profile):</span>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800/40 font-bold">
+                    {c.user_role || 'ADMIN'}
+                  </span>
                 </div>
+                <div className="flex items-center space-x-2">
+                  <User className="w-4 h-4 text-emerald-400" />
+                  <span className="text-xs font-bold text-white">{c.user_name || c.label}</span>
+                </div>
+                <div className="text-[11px] font-mono text-neutral-400 flex items-center space-x-1">
+                  <Mail className="w-3 h-3 text-neutral-500" />
+                  <span className="truncate">{c.user_email || `${c.user_id}@catauth.io`}</span>
+                </div>
+              </div>
 
-                <div className="text-[11px] text-neutral-400 space-y-1">
-                  <div>Transports: <span className="text-neutral-300">{c.transports.join(', ')}</span></div>
-                  <div>Terdaftar: <span className="text-neutral-500">{new Date(c.created_at || '').toLocaleDateString()}</span></div>
-                  {c.revocation_reason && (
-                    <div className="text-red-400 font-mono">Alasan Blokir: {c.revocation_reason}</div>
-                  )}
+              {/* Signature Counter & Details */}
+              <div className="text-xs font-mono space-y-1.5 text-neutral-400">
+                <div className="flex items-center justify-between p-2 rounded bg-neutral-950/60 border border-neutral-900">
+                  <span className="text-[11px] text-neutral-500">Sign Counter:</span>
+                  <span className="text-white font-bold">{c.sign_count} taps</span>
                 </div>
+                {c.revocation_reason && (
+                  <div className="text-red-400 font-mono text-[11px]">Alasan Blokir: {c.revocation_reason}</div>
+                )}
               </div>
             </div>
 
             {/* Bottom Action Toggle */}
-            <div className="pt-4 border-t border-neutral-800/80 flex items-center justify-between">
-              <span className="text-[10px] font-mono text-neutral-500">
-                {c.is_active ? 'Keamanan Normal' : 'Akses Ditolak di Semua Link'}
-              </span>
+            <div className="pt-3 border-t border-neutral-800/80 flex items-center justify-between">
+              <button
+                onClick={() => handleOpenEdit(c)}
+                className="text-[11px] text-cyan-400 hover:underline font-mono"
+              >
+                Ubah Info Akun ➔
+              </button>
 
               <button
                 onClick={() => handleToggleStatus(c.credential_id, c.is_active)}
@@ -355,55 +402,239 @@ export default function AdminKeysPage() {
                     : 'bg-white hover:bg-neutral-200 text-black'
                 }`}
               >
-                {c.is_active ? 'Cabut Akses (Revoke)' : 'Aktifkan Kembali'}
+                {c.is_active ? 'Cabut Akses' : 'Aktifkan'}
               </button>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Manual Card Registration Modal */}
-      {showManualModal && (
+      {/* Registration Modal (Binding NFC Card to Account Information) */}
+      {showRegisterModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bento-card max-w-md w-full p-6 border-neutral-700 bg-black space-y-4 animate-in fade-in zoom-in-95 duration-150">
-            <h3 className="text-base font-bold text-white">Input Manual Data Kartu NFC</h3>
-            <form onSubmit={handleManualSubmit} className="space-y-3">
+          <div className="bento-card max-w-lg w-full p-6 border-neutral-700 bg-black space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  Hubungkan Kartu NFC ke Akun Pengguna
+                </h3>
+                <p className="text-xs text-neutral-400">
+                  Tentukan akun yang akan otomatis login ketika kartu fisik ini ditempelkan.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowRegisterModal(false)}
+                className="text-neutral-500 hover:text-white text-lg leading-none"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveRegister} className="space-y-3.5">
+              {/* Card Hardware Details */}
+              <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 space-y-1">
+                <span className="text-[10px] font-mono text-neutral-500 block">UID Kartu Hardware Terdeteksi:</span>
+                <span className="text-xs font-mono font-bold text-cyan-300">{formCardId}</span>
+              </div>
+
+              {/* Label Kartu */}
               <div className="space-y-1">
-                <label className="text-xs text-neutral-300">Label / Nama Kartu <span className="text-red-400">*</span></label>
+                <label className="text-xs font-medium text-neutral-300">
+                  Label Kartu Fisik <span className="text-red-400">*</span>
+                </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Master YubiKey CFO, Kartu Akses Tim Alpha"
-                  value={manualLabel}
-                  onChange={(e) => setManualLabel(e.target.value)}
-                  className="w-full px-3 py-2 rounded bg-neutral-900 border border-neutral-800 text-sm text-white focus:outline-none"
+                  placeholder="e.g. e-Money Mandiri Utama, Flazz BCA Ferdi"
+                  value={formLabel}
+                  onChange={(e) => setFormLabel(e.target.value)}
+                  className="w-full px-3 py-2 rounded bg-neutral-900 border border-neutral-800 text-sm text-white focus:outline-none focus:border-neutral-500"
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-xs text-neutral-300">Credential ID / Token Serial</label>
-                <input
-                  type="text"
-                  placeholder="e.g. FIDO2-NFC-DELTA-05 (Auto-generate jika kosong)"
-                  value={manualId}
-                  onChange={(e) => setManualId(e.target.value)}
-                  className="w-full px-3 py-2 rounded bg-neutral-900 border border-neutral-800 text-sm font-mono text-cyan-300 focus:outline-none"
-                />
+              {/* Account Information Section */}
+              <div className="p-3.5 rounded-lg bg-neutral-950 border border-neutral-800 space-y-3">
+                <span className="text-xs font-bold text-white block flex items-center space-x-1.5">
+                  <UserCheck className="w-4 h-4 text-emerald-400" />
+                  <span>Informasi Akun Pemilik:</span>
+                </span>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-neutral-400">Nama Lengkap Pemilik</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Ferdi Pratama"
+                      value={formUserName}
+                      onChange={(e) => setFormUserName(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs text-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-neutral-400">User ID / Username</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. usr_ferdi_admin"
+                      value={formUserId}
+                      onChange={(e) => setFormUserId(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs text-cyan-300 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-neutral-400">Email Akun</label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="e.g. ferdi@perusahaan.com"
+                      value={formEmail}
+                      onChange={(e) => setFormEmail(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs text-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-neutral-400">Role / Hak Akses</label>
+                    <select
+                      value={formRole}
+                      onChange={(e) => setFormRole(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs text-white"
+                    >
+                      <option value="ADMIN">ADMIN (Superuser)</option>
+                      <option value="MANAGER">MANAGER (Supervisor)</option>
+                      <option value="STAFF">STAFF (Karyawan)</option>
+                      <option value="VIP_USER">VIP_USER (Nasabah VIP)</option>
+                      <option value="OPERATOR">OPERATOR (Shift Lapangan)</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
-              <div className="flex justify-end space-x-2 pt-3">
+              <div className="flex justify-end space-x-2 pt-3 border-t border-neutral-800">
                 <button
                   type="button"
-                  onClick={() => setShowManualModal(false)}
+                  onClick={() => setShowRegisterModal(false)}
                   className="px-3 py-1.5 rounded hover:bg-neutral-900 text-neutral-400 text-xs"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 rounded bg-white text-black font-medium text-xs hover:bg-neutral-200"
+                  className="px-4 py-2 rounded bg-white text-black font-semibold text-xs hover:bg-neutral-200"
                 >
-                  Daftarkan Kunci
+                  Simpan & Hubungkan ke Akun
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Account Modal */}
+      {showEditModal && editingCred && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bento-card max-w-lg w-full p-6 border-neutral-700 bg-black space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  Edit Akun Pemilik Kartu
+                </h3>
+                <p className="text-xs text-neutral-400">
+                  Ubah nama, email, dan role yang terikat dengan kartu {editingCred.credential_id}.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="text-neutral-500 hover:text-white text-lg leading-none"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-3.5">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-neutral-300">Label Kartu Fisik</label>
+                <input
+                  type="text"
+                  required
+                  value={formLabel}
+                  onChange={(e) => setFormLabel(e.target.value)}
+                  className="w-full px-3 py-2 rounded bg-neutral-900 border border-neutral-800 text-sm text-white"
+                />
+              </div>
+
+              <div className="p-3.5 rounded-lg bg-neutral-950 border border-neutral-800 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-neutral-400">Nama Lengkap</label>
+                    <input
+                      type="text"
+                      required
+                      value={formUserName}
+                      onChange={(e) => setFormUserName(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs text-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-neutral-400">User ID</label>
+                    <input
+                      type="text"
+                      required
+                      value={formUserId}
+                      onChange={(e) => setFormUserId(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs text-cyan-300 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-neutral-400">Email Akun</label>
+                    <input
+                      type="email"
+                      required
+                      value={formEmail}
+                      onChange={(e) => setFormEmail(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs text-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-neutral-400">Role / Hak Akses</label>
+                    <select
+                      value={formRole}
+                      onChange={(e) => setFormRole(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs text-white"
+                    >
+                      <option value="ADMIN">ADMIN (Superuser)</option>
+                      <option value="MANAGER">MANAGER (Supervisor)</option>
+                      <option value="STAFF">STAFF (Karyawan)</option>
+                      <option value="VIP_USER">VIP_USER (Nasabah VIP)</option>
+                      <option value="OPERATOR">OPERATOR (Shift Lapangan)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-3 border-t border-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => setShowEditModal(false)}
+                  className="px-3 py-1.5 rounded hover:bg-neutral-900 text-neutral-400 text-xs"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded bg-white text-black font-semibold text-xs hover:bg-neutral-200"
+                >
+                  Simpan Perubahan Akun
                 </button>
               </div>
             </form>

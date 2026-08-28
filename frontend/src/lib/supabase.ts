@@ -47,6 +47,9 @@ export const db = {
       return (data || []).map((row: any) => ({
         id: row.id,
         user_id: row.user_id,
+        user_name: row.user_name || row.label,
+        user_email: row.user_email || `${row.user_id}@catauth.io`,
+        user_role: row.user_role || 'ADMIN',
         credential_id: row.credential_id,
         label: row.label,
         sign_count: row.sign_count || 0,
@@ -71,6 +74,9 @@ export const db = {
         .upsert({
           id: cred.id,
           user_id: cred.user_id,
+          user_name: cred.user_name || cred.label,
+          user_email: cred.user_email || `${cred.user_id}@catauth.io`,
+          user_role: cred.user_role || 'ADMIN',
           credential_id: cred.credential_id,
           label: cred.label,
           sign_count: cred.sign_count || 0,
@@ -105,6 +111,29 @@ export const db = {
       return data;
     } catch (err) {
       console.warn('Supabase updateCredentialStatus error:', err);
+      return null;
+    }
+  },
+
+  async updateCredentialProfile(credentialId: string, updates: Partial<FIDO2Credential>) {
+    const sb = getSupabase();
+    if (!sb) return null;
+    try {
+      const { data, error } = await sb
+        .from('credentials')
+        .update({
+          user_id: updates.user_id,
+          user_name: updates.user_name,
+          user_email: updates.user_email,
+          user_role: updates.user_role,
+          label: updates.label,
+        })
+        .or(`credential_id.eq.${credentialId},id.eq.${credentialId}`)
+        .select();
+      if (error) throw error;
+      return data;
+    } catch (err) {
+      console.warn('Supabase updateCredentialProfile error:', err);
       return null;
     }
   },

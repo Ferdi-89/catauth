@@ -1,65 +1,66 @@
 import {
-  APIResponse,
-  TelemetryDashboard,
-  AuditLog,
+  StandardResponse,
   ClientApp,
   FIDO2Credential,
   ProtectedLink,
+  AuditLog,
+  DashboardTelemetry as TelemetryDashboard,
 } from './types';
 
-// Standalone Next.js 14 API Route Handlers
-const API_BASE_URL = '';
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
-async function request<T>(
+async function request<T = any>(
   endpoint: string,
   options: RequestInit = {}
-): Promise<APIResponse<T>> {
-  try {
-    const url = `${API_BASE_URL}${endpoint}`;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...(options.headers as Record<string, string>),
-    };
+): Promise<StandardResponse<T>> {
+  const url = `${BASE_URL}${endpoint}`;
+  const defaultHeaders: HeadersInit = {
+    'Content-Type': 'application/json',
+  };
 
-    const res = await fetch(url, {
+  try {
+    const response = await fetch(url, {
       ...options,
-      headers,
+      headers: {
+        ...defaultHeaders,
+        ...options.headers,
+      },
     });
 
-    const data = await res.json();
+    const data = await response.json();
     return data;
-  } catch (err: any) {
-    console.error(`API Request Error [${endpoint}]:`, err);
+  } catch (error: any) {
+    console.error(`API Error [${endpoint}]:`, error);
     return {
       success: false,
       error: {
-        code: 'NETWORK_ERROR',
-        message: err.message || 'Gagal terhubung ke gateway API.',
+        code: 'NETWORK_OR_SERVER_ERROR',
+        message: error.message || 'Gagal menghubungi server.',
       },
     };
   }
 }
 
-// Local storage keys for persistent offline/cold-start resilience
-const STORAGE_CUSTOM_KEYS = 'catauth_custom_keys_v1';
-const STORAGE_CUSTOM_LINKS = 'catauth_custom_links_v1';
+// LocalStorage Persistence Layer for Serverless Cold-Start Resilience
+const STORAGE_CUSTOM_KEYS = 'catauth_custom_credentials';
+const STORAGE_CUSTOM_LINKS = 'catauth_custom_links';
 
 function getLocalCustomKeys(): FIDO2Credential[] {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(STORAGE_CUSTOM_KEYS);
-    return raw ? JSON.parse(raw) : [];
+    const data = localStorage.getItem(STORAGE_CUSTOM_KEYS);
+    return data ? JSON.parse(data) : [];
   } catch {
     return [];
   }
 }
 
-function saveLocalCustomKey(key: FIDO2Credential) {
+function saveLocalCustomKey(cred: FIDO2Credential) {
   if (typeof window === 'undefined') return;
   try {
     const existing = getLocalCustomKeys();
-    const filtered = existing.filter((k) => k.credential_id !== key.credential_id);
-    filtered.push(key);
+    const filtered = existing.filter((c) => c.credential_id !== cred.credential_id);
+    filtered.push(cred);
     localStorage.setItem(STORAGE_CUSTOM_KEYS, JSON.stringify(filtered));
   } catch (err) {
     console.warn('LocalStorage save error:', err);
@@ -69,8 +70,8 @@ function saveLocalCustomKey(key: FIDO2Credential) {
 function getLocalCustomLinks(): ProtectedLink[] {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(STORAGE_CUSTOM_LINKS);
-    return raw ? JSON.parse(raw) : [];
+    const data = localStorage.getItem(STORAGE_CUSTOM_LINKS);
+    return data ? JSON.parse(data) : [];
   } catch {
     return [];
   }
@@ -107,11 +108,9 @@ export const api = {
     const localLinks = getLocalCustomLinks();
 
     if (res.success && res.data) {
-      // If server cold-started, rehydrate missing local links to server
       const serverIds = new Set(res.data.map((l) => l.id));
       for (const localLink of localLinks) {
         if (!serverIds.has(localLink.id)) {
-          // Re-post to server store
           api.createProtectedLink(localLink);
           res.data.push(localLink);
         }
@@ -139,6 +138,10 @@ export const api = {
     return res;
   },
 
+  getProtectedLink: (id: string) => {
+    return request<ProtectedLink>(`/api/v1/links/${id}`);
+  },
+
   updateProtectedLink: async (id: string, payload: Partial<ProtectedLink>) => {
     const res = await request<ProtectedLink>(`/api/v1/links/${id}`, {
       method: 'PUT',
@@ -150,53 +153,37 @@ export const api = {
     return res;
   },
 
-  deleteProtectedLink: (id: string) => {
+  deleteProtectedLink: async (id: string) => {
     if (typeof window !== 'undefined') {
       try {
-        const local = getLocalCustomLinks().filter((l) => l.id !== id);
-        localStorage.setItem(STORAGE_CUSTOM_LINKS, JSON.stringify(local));
-      } catch {}
+        const existing = getLocalCustomLinks();
+        const filtered = existing.filter((l) => l.id !== id);
+        localStorage.setItem(STORAGE_CUSTOM_LINKS, JSON.stringify(filtered));
+      } catch (e) {
+        console.warn('LocalStorage error:', e);
+      }
     }
-    return request<void>(`/api/v1/links/${id}`, {
+    return request(`/api/v1/links/${id}`, {
       method: 'DELETE',
     });
   },
 
-  // SSO & WebAuthn
-  validateClient: (clientIdOrLinkId: string, redirectUri?: string, state?: string, nonce?: string, linkId?: string) => {
-    const params = new URLSearchParams();
-    if (linkId) {
-      params.set('link_id', linkId);
-    } else if (clientIdOrLinkId.startsWith('lnk_') || !clientIdOrLinkId.startsWith('client_')) {
-      params.set('link_id', clientIdOrLinkId);
-    } else {
-      params.set('client_id', clientIdOrLinkId);
-    }
-    if (redirectUri) params.set('redirect_uri', redirectUri);
-    if (state) params.set('state', state);
-    if (nonce) params.set('nonce', nonce);
-
-    return request(`/api/v1/auth/validate-client?${params.toString()}`);
-  },
-
-  getChallenge: (clientId: string, userIdentifier?: string) => {
-    return request('/api/v1/auth/challenge', {
-      method: 'POST',
-      body: JSON.stringify({ client_id: clientId, user_identifier: userIdentifier }),
-    });
+  // Direct Auth & WebAuthn / Web NFC Assertion
+  getAuthChallenge: (clientId: string, linkId?: string) => {
+    const params = new URLSearchParams({ client_id: clientId });
+    if (linkId) params.set('link_id', linkId);
+    return request(`/api/v1/auth/challenge?${params.toString()}`);
   },
 
   submitAssertion: (payload: {
-    client_id?: string;
-    link_id?: string;
-    redirect_uri?: string;
-    challenge: string;
+    client_id: string;
     credential_id: string;
-    client_data_json: string;
+    challenge: string;
     authenticator_data: string;
+    client_data_json: string;
     signature: string;
-    state?: string;
-    nonce?: string;
+    link_id?: string;
+    user_handle?: string;
   }) => {
     return request('/api/v1/auth/assertion', {
       method: 'POST',
@@ -250,13 +237,12 @@ export const api = {
     });
   },
 
-  // Hardware Credentials Vault (with LocalStorage Rehydration)
+  // Hardware Credentials Vault (with LocalStorage Rehydration & User Profile)
   listCredentials: async () => {
     const res = await request<FIDO2Credential[]>('/api/v1/credentials/tokens');
     const localKeys = getLocalCustomKeys();
 
     if (res.success && res.data) {
-      // Rehydrate local custom cards to server if cold-started
       const serverCredIds = new Set(res.data.map((c) => c.credential_id));
       for (const localKey of localKeys) {
         if (!serverCredIds.has(localKey.credential_id)) {
@@ -270,6 +256,9 @@ export const api = {
 
   registerCredential: async (payload: {
     user_id: string;
+    user_name?: string;
+    user_email?: string;
+    user_role?: string;
     credential_id: string;
     label: string;
     aaguid?: string;
@@ -278,6 +267,24 @@ export const api = {
   }) => {
     const res = await request<FIDO2Credential>('/api/v1/credentials/tokens', {
       method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if (res.success && res.data) {
+      saveLocalCustomKey(res.data);
+    }
+    return res;
+  },
+
+  updateCredentialProfile: async (payload: {
+    credential_id: string;
+    user_id?: string;
+    user_name?: string;
+    user_email?: string;
+    user_role?: string;
+    label?: string;
+  }) => {
+    const res = await request<FIDO2Credential>('/api/v1/credentials/tokens', {
+      method: 'PUT',
       body: JSON.stringify(payload),
     });
     if (res.success && res.data) {
@@ -319,17 +326,6 @@ export const api = {
     return request('/api/v1/admin/dlq/replay', {
       method: 'POST',
       body: JSON.stringify({ dlq_id: dlqId }),
-    });
-  },
-
-  listCircuitBreakers: () => {
-    return request('/api/v1/admin/circuit-breakers');
-  },
-
-  overrideCircuitBreaker: (clientId: string, newState: 'CLOSED' | 'OPEN' | 'HALF_OPEN') => {
-    return request('/api/v1/admin/circuit-breakers', {
-      method: 'POST',
-      body: JSON.stringify({ client_id: clientId, state: newState }),
     });
   },
 };
