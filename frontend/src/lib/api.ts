@@ -1,6 +1,7 @@
 import { StandardResponse } from './types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
+
 
 async function request<T = any>(endpoint: string, options: RequestInit = {}): Promise<StandardResponse<T>> {
   const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;

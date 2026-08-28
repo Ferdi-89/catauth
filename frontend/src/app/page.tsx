@@ -11,7 +11,7 @@ export default function HomePage() {
       title: 'WebAuthn / FIDO2 NFC',
       description: 'Strict RP origin binding & static zero sign_count counter anti-cloning tolerance.',
       tag: 'Node 1 — 33',
-      href: '/sso/login?client_id=client_portal_alpha&redirect_uri=http://localhost:3000/sso/callback&state=demo_state_123',
+      href: '/sso/login?client_id=client_portal_alpha&redirect_uri=/sso/callback&state=demo_state_123',
     },
     {
       title: 'Edge Ingress Rate Limiting',
@@ -65,12 +65,13 @@ export default function HomePage() {
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
           <Link
-            href="/sso/login?client_id=client_portal_alpha&redirect_uri=http://localhost:3000/sso/callback&state=demo_state_123"
+            href="/sso/login?client_id=client_portal_alpha&redirect_uri=/sso/callback&state=demo_state_123"
             className="px-6 py-2.5 rounded-md bg-white text-black font-medium text-sm hover:bg-neutral-200 transition-colors inline-flex items-center space-x-2"
           >
             <span>Launch SSO Gateway</span>
             <ArrowRight className="w-4 h-4" />
           </Link>
+
 
           <Link
             href="/admin/topology"

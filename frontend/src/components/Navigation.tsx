@@ -11,7 +11,8 @@ export function Navigation() {
 
   const navItems = [
     { label: 'Overview', href: '/', icon: Layers },
-    { label: 'SSO Gateway', href: '/sso/login?client_id=client_portal_alpha&redirect_uri=http://localhost:3000/sso/callback&state=demo_state_123', icon: Radio },
+    { label: 'SSO Gateway', href: '/sso/login?client_id=client_portal_alpha&redirect_uri=/sso/callback&state=demo_state_123', icon: Radio },
+
     { label: 'Telemetry', href: '/admin/dashboard', icon: Server },
     { label: 'Topology 72N', href: '/admin/topology', icon: Layers },
     { label: 'Clients', href: '/admin/clients', icon: Shield },

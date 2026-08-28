@@ -31,7 +31,8 @@ function SSOCallbackContent() {
         code: code,
         client_id: 'client_portal_alpha',
         client_secret: 'sec_portal_alpha_998811',
-        redirect_uri: 'http://localhost:3000/sso/callback',
+        redirect_uri: typeof window !== 'undefined' ? `${window.location.origin}/sso/callback` : '/sso/callback',
+
       });
 
       if (res.success && res.data) {

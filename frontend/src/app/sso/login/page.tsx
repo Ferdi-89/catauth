@@ -16,7 +16,8 @@ function SSOLoginContent() {
 
   // Query parameters
   const clientId = searchParams.get('client_id') || 'client_portal_alpha';
-  const redirectUri = searchParams.get('redirect_uri') || 'http://localhost:3000/sso/callback';
+  const redirectUri = searchParams.get('redirect_uri') || '/sso/callback';
+
   const state = searchParams.get('state') || 'demo_state_123';
   const nonce = searchParams.get('nonce') || 'demo_nonce_xyz';
 
